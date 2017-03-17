@@ -1,4 +1,5 @@
 #include <netinet/in.h>
+# include <netinet/udp.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -6,6 +7,9 @@
 #include <time.h>
 #include <unistd.h>
 #include "mtcp_server.h"
+# include <errno.h>
+# include <sys/socket.h>
+# include <sys/types.h>
 
 /* ThreadID for Sending Thread and Receiving Thread */
 static pthread_t send_thread_pid;
@@ -28,10 +32,12 @@ void mtcp_accept(int socket_fd, struct sockaddr_in *server_addr){
     pthread_mutex_init(&send_thread_sig_mutex, NULL);
     pthread_mutex_init(&app_thread_sig_mutex, NULL);
 
-    pthread_t thread_1;
-    pthread_t thread_2;
-    pthread_create( &thread_1, NULL,send_thread,NULL );
-    pthread_create( &thread_2, NULL,receive_thread,NULL );
+    pthread_create( &send_thread_pid, NULL,send_thread,NULL );
+    pthread_create( &recv_thread_pid, NULL,receive_thread,NULL );
+
+    pthread_cond_wait(&app_thread_sig, &app_thread_sig_mutex);
+
+
 }
 
 int mtcp_read(int socket_fd, unsigned char *buf, int buf_len){
@@ -44,8 +50,12 @@ void mtcp_close(int socket_fd){
 
 static void *send_thread(){
 
+    pthread_cond_wait(&send_thread_sig, &send_thread_sig_mutex);
 }
 
 static void *receive_thread(){
+    // When received SYN packet, then wake up send_thread
+    pthread_cond_signal(&send_thread_sig);
 
+    pthread_cond_signal(&app_thread_sig);
 }
