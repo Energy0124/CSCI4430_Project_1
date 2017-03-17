@@ -24,7 +24,14 @@ static void *send_thread();
 static void *receive_thread();
 
 void mtcp_accept(int socket_fd, struct sockaddr_in *server_addr){
+    // Initialize mutex for send_thread and receive_thread
+    pthread_mutex_init(&send_thread_sig_mutex, NULL);
+    pthread_mutex_init(&app_thread_sig_mutex, NULL);
 
+    pthread_t thread_1;
+    pthread_t thread_2;
+    pthread_create( &thread_1, NULL,send_thread,NULL );
+    pthread_create( &thread_2, NULL,receive_thread,NULL );
 }
 
 int mtcp_read(int socket_fd, unsigned char *buf, int buf_len){
