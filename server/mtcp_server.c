@@ -23,6 +23,11 @@ static pthread_mutex_t send_thread_sig_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static pthread_mutex_t info_mutex = PTHREAD_MUTEX_INITIALIZER;
 
+struct sockaddr_in *client_addr;
+int sd;
+
+socklen_t addrLen;
+char buff[1000];
 /* The Sending Thread and Receive Thread Function */
 static void *send_thread();
 static void *receive_thread();
@@ -34,7 +39,9 @@ void mtcp_accept(int socket_fd, struct sockaddr_in *server_addr){
 
     pthread_create( &send_thread_pid, NULL,send_thread,NULL );
     pthread_create( &recv_thread_pid, NULL,receive_thread,NULL );
-
+    sd = socket_fd;
+    client_addr = server_addr;
+    addrLen =  sizeof(server_addr);
     pthread_cond_wait(&app_thread_sig, &app_thread_sig_mutex);
 
 
@@ -49,11 +56,24 @@ void mtcp_close(int socket_fd){
 }
 
 static void *send_thread(){
-
+    int len;
+    int ackBuff = 0;
     pthread_cond_wait(&send_thread_sig, &send_thread_sig_mutex);
+
+    // send response to the client
+    if((len = sendto(sd, ackBuff, strlen(ackBuff), 0, (struct sockaddr*)&client_addr, addrLen)) <= 0) {
+        printf("Send Error: %s (Errno:%d)\n",strerror(errno),errno);
+        exit(0);
+    }
 }
 
 static void *receive_thread(){
+    int len;
+    // receive message from the client
+    if((len = recvfrom(sd, buff, sizeof(buff), 0, (struct sockaddr*)client_addr, &addrLen)) <= 0) {
+        printf("receive error: %s (Errno:%d)\n", strerror(errno),errno);
+    }
+    buff[len] = '\0';
     // When received SYN packet, then wake up send_thread
     pthread_cond_signal(&send_thread_sig);
 
