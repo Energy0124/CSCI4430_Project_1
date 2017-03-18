@@ -124,12 +124,15 @@ size_t dequeue_receive_buffer(char *dequeued_buffer, size_t dequeued_buffer_size
 /*
  * given a header buffer, packet type and seq
  * it will encode the header to the buffer
+ * return header size
  */
-void encode_header_to_packet(char type, uint32_t seq, char *header_buffer) {
+int encode_header_to_packet(char type, uint32_t seq, char *header_buffer) {
     seq = htonl(seq);
     memcpy(header_buffer, &seq, 4);
     header_buffer[0] = header_buffer[0] | (type << 4);
+    return 4;
 }
+
 /*
  * given a header buffer, and provide type and seq pointer for data return
  * it will decode the header to the buffer
@@ -144,29 +147,36 @@ char decode_header_from_packet(char *type_ptr, uint32_t *seq_ptr, char *header_b
 
 }
 
-size_t construct_packet_to_buffer(int type, uint32_t seq, char *data, size_t data_size, char *packet_buffer) {
-
+/*
+ * given a packet buffer,  packet type and seq, data buffer and data size
+ * it will construct the packet to the buffer
+ * and return the packet size
+ */
+size_t construct_packet_to_buffer(char type, uint32_t seq, char *data, size_t data_size, char *packet_buffer) {
+    int header_size = encode_header_to_packet(type, seq, packet_buffer);
+    memcpy(packet_buffer + header_size, data, data_size);
+    return header_size + data_size;
 }
 
 /*
  * return the packet type
  */
-char get_packet_type(char *packet_buffer){
+char get_packet_type(char *packet_buffer) {
     char type;
     uint32_t seq;
     decode_header_from_packet(&type, &seq, packet_buffer);
     return type;
 }
+
 /*
  * return the packet seq
  */
-uint32_t get_packet_seq(char *packet_buffer){
+uint32_t get_packet_seq(char *packet_buffer) {
     char type;
     uint32_t seq;
     decode_header_from_packet(&type, &seq, packet_buffer);
     return seq;
 }
-
 
 
 static void *send_thread() {
