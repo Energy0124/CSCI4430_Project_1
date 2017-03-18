@@ -13,12 +13,15 @@
 
 
 typedef enum client_state {
-    UNDEFINED, CONNECTING, DATA_TRANSMITTING, DISCONNECTING
+    CLOSED,
+    CONNECTING_START, CONNECTING_SYN_SENT, CONNECTING_SYN_ACK_RECEIVED, CONNECTED,
+
+    DATA_TRANSMITTING, DISCONNECTING,
 
 } ClientState;
 
 typedef enum packet_type {
-    SYN, SYN_ACK, FIN, FIN_ACK, ACK, DATA, OTHER
+    SYN, SYN_ACK, FIN, FIN_ACK, ACK, DATA, UNDEFINED
 } PacketType;
 
 /* ThreadID for Sending Thread and Receiving Thread */
@@ -41,8 +44,8 @@ size_t receive_buffer_max_size = MAX_BUF_SIZE * MAX_BUF_SIZE + 1;
 size_t receive_buffer_current_size = 0;
 
 //client state
-ClientState state = UNDEFINED;
-PacketType lastPacketType = OTHER;
+ClientState state = CLOSED;
+PacketType lastPacketType = UNDEFINED;
 int sequence_number = 0;
 
 
@@ -53,11 +56,12 @@ int sequence_number = 0;
  * then return new target buffer
  * if realloc encounter error, a NULL pointer will be returned
  */
-char *enqueue_buffer(char *target_buffer, size_t *target_buffer_current_size, size_t *target_buffer_max_size,
+char *enqueue_buffer(char *target_buffer, size_t *target_buffer_current_size_ptr, size_t *target_buffer_max_size_ptr,
                      char *source_buffer, size_t source_buffer_size) {
 
-    if (source_buffer_size + target_buffer_current_size > target_buffer_max_size) {
-        char *new_target_buffer = realloc(target_buffer, (size_t) (source_buffer_size + target_buffer_max_size) * 2);
+    if (source_buffer_size + *target_buffer_current_size_ptr > *target_buffer_max_size_ptr) {
+        char *new_target_buffer = realloc(target_buffer,
+                                          (size_t) (source_buffer_size + *target_buffer_max_size_ptr) * 2);
         if (new_target_buffer != NULL) {
             return new_target_buffer;
         } else {
@@ -65,7 +69,7 @@ char *enqueue_buffer(char *target_buffer, size_t *target_buffer_current_size, si
             return NULL;
         }
     } else {
-        memcpy(target_buffer + (int) target_buffer_current_size, source_buffer, source_buffer_size);
+        memcpy(target_buffer + *target_buffer_current_size_ptr, source_buffer, source_buffer_size);
         return target_buffer;
     }
 }
@@ -81,7 +85,8 @@ char *enqueue_send_buffer(char *source_buffer, size_t source_buffer_size) {
  * wrapper of enqueue_buffer for receive buffer
  */
 char *enqueue_receive_buffer(char *source_buffer, size_t source_buffer_size) {
-    enqueue_buffer(receive_buffer, &receive_buffer_current_size, &receive_buffer_max_size, source_buffer, source_buffer_size);
+    enqueue_buffer(receive_buffer, &receive_buffer_current_size, &receive_buffer_max_size, source_buffer,
+                   source_buffer_size);
 }
 
 
@@ -90,15 +95,15 @@ char *enqueue_receive_buffer(char *source_buffer, size_t source_buffer_size) {
  * the got buffer will then be stored in dequeued_buffer
  * it will return the new target_buffer_current_size
  */
-size_t dequeue_buffer(char *target_buffer, size_t *target_buffer_current_size,
-                     char *dequeued_buffer, size_t dequeued_buffer_size) {
-    if (*target_buffer_current_size < dequeued_buffer_size ) {
+size_t dequeue_buffer(char *target_buffer, size_t *target_buffer_current_size_ptr,
+                      char *dequeued_buffer, size_t dequeued_buffer_size) {
+    if (*target_buffer_current_size_ptr < dequeued_buffer_size) {
         printf("target_buffer_current_size < dequeued_buffer_size!\n");
         return NULL;
     }
     memcpy(dequeued_buffer, target_buffer, dequeued_buffer_size);
     memmove(target_buffer, target_buffer + (int) dequeued_buffer_size, dequeued_buffer_size);
-    return *target_buffer_current_size -= dequeued_buffer_size;
+    return *target_buffer_current_size_ptr -= dequeued_buffer_size;
 }
 
 
@@ -108,12 +113,32 @@ size_t dequeue_buffer(char *target_buffer, size_t *target_buffer_current_size,
 size_t dequeue_send_buffer(char *dequeued_buffer, size_t dequeued_buffer_size) {
     dequeue_buffer(send_buffer, &send_buffer_current_size, dequeued_buffer, dequeued_buffer_size);
 }
+
 /*
  * wrapper of dequeue_buffer for receive buffer
  */
 size_t dequeue_receive_buffer(char *dequeued_buffer, size_t dequeued_buffer_size) {
     dequeue_buffer(receive_buffer, &receive_buffer_current_size, dequeued_buffer, dequeued_buffer_size);
 }
+
+void encode_header_to_packet(char type, uint32_t seq, char *header_buffer) {
+    seq = htonl(seq);
+    memcpy(header_buffer, &seq, 4);
+    header_buffer[0] = header_buffer[0] | (type << 4);
+}
+
+void decode_header_from_packet(char *type_ptr, uint32_t *seq_ptr, char *header_buffer) {
+    *type_ptr = header_buffer[0] >> 4;
+    header_buffer[0] = header_buffer[0] & (char) 0x0F;
+    memcpy(seq_ptr, header_buffer, 4);
+    *seq_ptr = ntohl(*seq_ptr);
+
+}
+
+size_t construct_packet_to_buffer(int type, uint32_t seq, char *data, size_t data_size, char *packet_buffer) {
+
+}
+
 
 static void *send_thread() {
 
