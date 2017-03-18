@@ -33,16 +33,87 @@ static pthread_mutex_t send_thread_sig_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 static pthread_mutex_t info_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-static char *send_buffer;
-static size_t send_buffer_size = MAX_BUF_SIZE * MAX_BUF_SIZE + 1;
-static char *receive_buffer;
-static size_t receive_buffer_size = MAX_BUF_SIZE * MAX_BUF_SIZE + 1;
+char *send_buffer;
+size_t send_buffer_max_size = MAX_BUF_SIZE * MAX_BUF_SIZE + 1;
+size_t send_buffer_current_size = 0;
+char *receive_buffer;
+size_t receive_buffer_max_size = MAX_BUF_SIZE * MAX_BUF_SIZE + 1;
+size_t receive_buffer_current_size = 0;
 
 //client state
-static ClientState state = UNDEFINED;
-static PacketType lastPacketType = OTHER;
-static int sequence_number = 0;
+ClientState state = UNDEFINED;
+PacketType lastPacketType = OTHER;
+int sequence_number = 0;
 
+
+/*
+ * append data to buffer
+ * if data > max buffer size, then try to double the buffer size and append
+ * otherwise just append it to the end of the current buffer data
+ * then return new target buffer
+ * if realloc encounter error, a NULL pointer will be returned
+ */
+char *enqueue_buffer(char *target_buffer, size_t *target_buffer_current_size, size_t *target_buffer_max_size,
+                     char *source_buffer, size_t source_buffer_size) {
+
+    if (source_buffer_size + target_buffer_current_size > target_buffer_max_size) {
+        char *new_target_buffer = realloc(target_buffer, (size_t) (source_buffer_size + target_buffer_max_size) * 2);
+        if (new_target_buffer != NULL) {
+            return new_target_buffer;
+        } else {
+            printf("Realloc buffer failed!\n");
+            return NULL;
+        }
+    } else {
+        memcpy(target_buffer + (int) target_buffer_current_size, source_buffer, source_buffer_size);
+        return target_buffer;
+    }
+}
+
+/*
+ * wrapper of enqueue_buffer for send buffer
+ */
+char *enqueue_send_buffer(char *source_buffer, size_t source_buffer_size) {
+    enqueue_buffer(send_buffer, &send_buffer_current_size, &send_buffer_max_size, source_buffer, source_buffer_size);
+}
+
+/*
+ * wrapper of enqueue_buffer for receive buffer
+ */
+char *enqueue_receive_buffer(char *source_buffer, size_t source_buffer_size) {
+    enqueue_buffer(receive_buffer, &receive_buffer_current_size, &receive_buffer_max_size, source_buffer, source_buffer_size);
+}
+
+
+/*
+ * get the first N bytes from buffer and remove them from the buffer
+ * the got buffer will then be stored in dequeued_buffer
+ * it will return the new target_buffer_current_size
+ */
+size_t dequeue_buffer(char *target_buffer, size_t *target_buffer_current_size,
+                     char *dequeued_buffer, size_t dequeued_buffer_size) {
+    if (*target_buffer_current_size < dequeued_buffer_size ) {
+        printf("target_buffer_current_size < dequeued_buffer_size!\n");
+        return NULL;
+    }
+    memcpy(dequeued_buffer, target_buffer, dequeued_buffer_size);
+    memmove(target_buffer, target_buffer + (int) dequeued_buffer_size, dequeued_buffer_size);
+    return *target_buffer_current_size -= dequeued_buffer_size;
+}
+
+
+/*
+ * wrapper of dequeue_buffer for receive buffer
+ */
+size_t dequeue_send_buffer(char *dequeued_buffer, size_t dequeued_buffer_size) {
+    dequeue_buffer(send_buffer, &send_buffer_current_size, dequeued_buffer, dequeued_buffer_size);
+}
+/*
+ * wrapper of dequeue_buffer for receive buffer
+ */
+size_t dequeue_receive_buffer(char *dequeued_buffer, size_t dequeued_buffer_size) {
+    dequeue_buffer(receive_buffer, &receive_buffer_current_size, dequeued_buffer, dequeued_buffer_size);
+}
 
 static void *send_thread() {
 
@@ -58,33 +129,33 @@ void mtcp_connect(int socket_fd, struct sockaddr_in *server_addr) {
     // initialize size variable which is used later
     socklen_t addrLen = sizeof(server_addr);
     //create a large enough init buffer
-    send_buffer = malloc(send_buffer_size);
-    receive_buffer = malloc(receive_buffer_size);
+    send_buffer = malloc(send_buffer_max_size);
+    receive_buffer = malloc(receive_buffer_max_size);
     //create the two thread
     pthread_create(&send_thread_pid, NULL, (void *(*)(void *)) send_thread, NULL);
     pthread_create(&recv_thread_pid, NULL, (void *(*)(void *)) receive_thread, NULL);
 
 
-   /* char recvBuff[100];
-    char *buff = "hello";
-
-    ssize_t len;
-    // send message to server
-    printf("Say 'hello' to server.\n");
-    if ((len = sendto(socket_fd, buff, strlen(buff), 0, (struct sockaddr *) server_addr, addrLen)) <= 0) {
-        printf("Send Error: %s (Errno:%d)\n", strerror(errno), errno);
-        exit(0);
-    }
-
-    // receiver message from server
-    if ((len = recvfrom(socket_fd, recvBuff, sizeof(recvBuff) - 1, 0, NULL, NULL)) < 0) {
-        printf("Recv Error: %s (Errno:%d)\n", strerror(errno), errno);
-        exit(0);
-    } else {
-        recvBuff[len] = '\0';
-        printf("Received response from server: %s\n\n", recvBuff);
-    }
-    sleep(1);*/
+    /* char recvBuff[100];
+     char *buff = "hello";
+ 
+     ssize_t len;
+     // send message to server
+     printf("Say 'hello' to server.\n");
+     if ((len = sendto(socket_fd, buff, strlen(buff), 0, (struct sockaddr *) server_addr, addrLen)) <= 0) {
+         printf("Send Error: %s (Errno:%d)\n", strerror(errno), errno);
+         exit(0);
+     }
+ 
+     // receiver message from server
+     if ((len = recvfrom(socket_fd, recvBuff, sizeof(recvBuff) - 1, 0, NULL, NULL)) < 0) {
+         printf("Recv Error: %s (Errno:%d)\n", strerror(errno), errno);
+         exit(0);
+     } else {
+         recvBuff[len] = '\0';
+         printf("Received response from server: %s\n\n", recvBuff);
+     }
+     sleep(1);*/
 
 
 }
