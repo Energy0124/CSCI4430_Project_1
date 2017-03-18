@@ -127,17 +127,33 @@ void encode_header_to_packet(char type, uint32_t seq, char *header_buffer) {
     header_buffer[0] = header_buffer[0] | (type << 4);
 }
 
-void decode_header_from_packet(char *type_ptr, uint32_t *seq_ptr, char *header_buffer) {
+char decode_header_from_packet(char *type_ptr, uint32_t *seq_ptr, char *header_buffer) {
     *type_ptr = header_buffer[0] >> 4;
     header_buffer[0] = header_buffer[0] & (char) 0x0F;
     memcpy(seq_ptr, header_buffer, 4);
     *seq_ptr = ntohl(*seq_ptr);
+    return *type_ptr;
 
 }
 
 size_t construct_packet_to_buffer(int type, uint32_t seq, char *data, size_t data_size, char *packet_buffer) {
 
 }
+
+char get_packet_type(char *packet_buffer){
+    char type;
+    uint32_t seq;
+    decode_header_from_packet(&type, &seq, packet_buffer);
+    return type;
+}
+
+uint32_t get_packet_seq(char *packet_buffer){
+    char type;
+    uint32_t seq;
+    decode_header_from_packet(&type, &seq, packet_buffer);
+    return seq;
+}
+
 
 
 static void *send_thread() {
