@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.6.3)
+cmake_minimum_required(VERSION 3.6)
 project(CSCI4430_Project_1)
 
 set(CMAKE_C_STANDARD 99)
