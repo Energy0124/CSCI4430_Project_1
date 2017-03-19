@@ -54,6 +54,9 @@ int socket_file_descriptor;
 struct sockaddr_in *server_address;
 socklen_t address_length;
 
+bool receive_thread_should_stop = false;
+bool send_thread_should_stop = false;
+
 /*
  * append data to buffer
  * if data > max buffer size, then try to double the buffer size and append
@@ -186,12 +189,24 @@ char *construct_packet(PacketType type, uint32_t seq, char *data, size_t data_si
 }
 
 /*
+ * malloc the max size packet buffer
+ */
+char *malloc_packet_buffer(size_t *packet_size) {
+    *packet_size = 4 + 1000;
+    char *packet_buffer = malloc(*packet_size);
+    return packet_buffer;
+}
+
+/*
  * return the packet type
  */
-char get_packet_type(char *packet_buffer) {
+PacketType get_packet_type(char *packet_buffer) {
     PacketType type;
     uint32_t seq;
     decode_header_from_packet(&type, &seq, packet_buffer);
+    if (type >= UNDEFINED) {
+        return UNDEFINED;
+    }
     return type;
 }
 
@@ -232,6 +247,9 @@ static void *send_thread() {
                                   address_length)) <= 0) {
                     printf("Send Error: %s (Errno:%d)\n", strerror(errno), errno);
                     exit(0);
+                } else {
+                    printf("SYN packet sent");
+
                 }
                 change_state(CONNECTING_SYN_SENT);
                 pthread_cond_wait(&send_thread_sig, &send_thread_sig_mutex);
@@ -254,36 +272,57 @@ static void *send_thread() {
         if (state == OTHER) {
             break;
         }
-    } while (true);
+    } while (!send_thread_should_stop);
 
 }
 
 static void *receive_thread() {
     do {
-        switch (state) {
+        ssize_t len;
+        char packet_buffer[MAX_PACKET_SIZE];
+        if ((len = recvfrom(socket_file_descriptor, packet_buffer, MAX_PACKET_SIZE, 0, NULL, NULL)) < 0) {
+            printf("Recv Error: %s (Errno:%d)\n", strerror(errno), errno);
+            exit(0);
+        } else {
+            switch (state) {
 
-            case CLOSED:
-                break;
-            case CONNECTING_START:
-                break;
-            case CONNECTING_SYN_SENT:
-                break;
-            case CONNECTING_SYN_ACK_RECEIVED:
-                break;
-            case CONNECTED:
-                break;
-            case DATA_TRANSMITTING:
-                break;
-            case DISCONNECTING:
-                break;
-            case OTHER:
-                break;
+                case CLOSED:
+                    break;
+                case CONNECTING_START:
+                    break;
+                case CONNECTING_SYN_SENT: {
+//                    ssize_t len;
+//                    char packet_buffer[MAX_PACKET_SIZE];
+//                    // receiver message from server
+//                    if ((len = recvfrom(socket_file_descriptor, packet_buffer, MAX_PACKET_SIZE, 0, NULL, NULL)) < 0) {
+//                        printf("Recv Error: %s (Errno:%d)\n", strerror(errno), errno);
+//                        exit(0);
+//                    } else {
+                    if (get_packet_type(packet_buffer) == SYN_ACK && get_packet_seq(packet_buffer) == 1) {
+                        printf("SYN_ACK packet received");
+                        change_state(CONNECTING_SYN_ACK_RECEIVED);
+                    } else {
+                        printf("Type [%d] packet received", get_packet_type(packet_buffer));
+                    }
+//                    }
+                }
+                    break;
+                case CONNECTING_SYN_ACK_RECEIVED:
+                    break;
+                case CONNECTED:
+                    break;
+                case DATA_TRANSMITTING:
+                    break;
+                case DISCONNECTING:
+                    break;
+                case OTHER:
+                    break;
+            }
         }
-
         if (state == OTHER) {
             break;
         }
-    } while (true);
+    } while (!receive_thread_should_stop);
 
 }
 
@@ -291,6 +330,11 @@ static void *receive_thread() {
 void mtcp_connect(int socket_fd, struct sockaddr_in *server_addr) {
 
     socket_file_descriptor = socket_fd;
+    struct timeval tv;
+    tv.tv_sec = 1;  /* 1 Secs Timeout */
+    tv.tv_usec = 0;  // Not init'ing this can cause strange errors
+    setsockopt(socket_file_descriptor, SOL_SOCKET, SO_RCVTIMEO, (const char *) &tv, sizeof(struct timeval));
+
     server_address = server_addr;
     // initialize size variable which is used later
     address_length = sizeof(server_addr);

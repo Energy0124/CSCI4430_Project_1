@@ -2,6 +2,8 @@
 
 #define __MTCP_CLIENT__
 
+#define MAX_PACKET_SIZE 1004
+
 /* Library Function of mtcp */
 void mtcp_connect(int socket_fd, struct sockaddr_in *server_addr);
 int mtcp_write(int socket_fd, unsigned char *buf, int buf_len);
