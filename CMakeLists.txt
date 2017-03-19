@@ -1,7 +1,7 @@
-cmake_minimum_required(VERSION 3.6.3)
+cmake_minimum_required(VERSION 3.6)
 project(CSCI4430_Project_1)
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_C_STANDARD 99)
 
 include_directories(client)
 include_directories(server)
