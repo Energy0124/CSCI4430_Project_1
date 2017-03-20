@@ -59,6 +59,9 @@ socklen_t address_length;
 bool receive_thread_should_stop = false;
 bool send_thread_should_stop = false;
 
+bool app_thread_should_wake = false;
+bool send_thread_should_wake = false;
+
 /*
  * append data to buffer
  * if data > max buffer size, then try to double the buffer size and append
@@ -109,7 +112,7 @@ size_t dequeue_buffer(char *target_buffer, size_t *target_buffer_current_size_pt
                       char *dequeued_buffer, size_t dequeued_buffer_size) {
     if (*target_buffer_current_size_ptr < dequeued_buffer_size) {
         printf("target_buffer_current_size < dequeued_buffer_size!\n");
-        return NULL;
+        return 0;
     }
     memcpy(dequeued_buffer, target_buffer, dequeued_buffer_size);
     memmove(target_buffer, target_buffer + (int) dequeued_buffer_size, dequeued_buffer_size);
@@ -257,27 +260,35 @@ void change_state(ClientState clientState) {
 static void *send_thread() {
 
     do {
-        struct timespec abstime;
+        //TODO: fix this wait, cond_timewait take absolute time
+        //TODO: ref: http://stackoverflow.com/questions/1486833/pthread-cond-timedwait-help
+        /*struct timespec abstime;
         abstime.tv_sec = 1;
         abstime.tv_nsec = 0;
         pthread_cond_timedwait(&send_thread_sig, &send_thread_sig_mutex, &abstime);
-        switch (state) {
+*/        switch (state) {
             case CLOSED:
                 break;
             case CONNECTING_START: {
                 size_t packet_size;
                 char *buff = construct_packet(SYN, sequence_number, NULL, 0, &packet_size);
                 ssize_t len;
-                if ((len = sendto(socket_file_descriptor, buff, strlen(buff), 0, (struct sockaddr *) server_address,
+                if ((len = sendto(socket_file_descriptor, buff, packet_size, 0, (struct sockaddr *) server_address,
                                   address_length)) <= 0) {
                     printf("Send Error: %s (Errno:%d)\n", strerror(errno), errno);
                     exit(0);
-                } else {
-                    printf("SYN packet #%d sent", sequence_number);
-                    next_expected_sequence_number = sequence_number + 1;
-                    change_state(CONNECTING_SYN_SENT);
+                }
+                free(buff);
+                printf("SYN packet #%d sent", sequence_number);
+                next_expected_sequence_number = sequence_number + 1;
+                change_state(CONNECTING_SYN_SENT);
+                pthread_mutex_lock(&send_thread_sig_mutex);
+                while (!send_thread_should_wake) {
                     pthread_cond_wait(&send_thread_sig, &send_thread_sig_mutex);
                 }
+                pthread_mutex_unlock(&send_thread_sig_mutex);
+
+
             }
                 break;
             case CONNECTING_SYN_SENT:
@@ -286,17 +297,18 @@ static void *send_thread() {
                 size_t packet_size;
                 char *buff = construct_packet(ACK, sequence_number, NULL, 0, &packet_size);
                 ssize_t len;
-                if ((len = sendto(socket_file_descriptor, buff, strlen(buff), 0, (struct sockaddr *) server_address,
+                if ((len = sendto(socket_file_descriptor, buff, packet_size, 0, (struct sockaddr *) server_address,
                                   address_length)) <= 0) {
                     printf("Send Error: %s (Errno:%d)\n", strerror(errno), errno);
                     exit(0);
-                } else {
-                    printf("ACK packet #%d sent", sequence_number);
-                    next_expected_sequence_number = sequence_number + 1;
-                    change_state(CONNECTED);
-                    pthread_cond_signal(&app_thread_sig);
-                    pthread_cond_wait(&send_thread_sig, &send_thread_sig_mutex);
                 }
+                free(buff);
+                printf("ACK packet #%d sent", sequence_number);
+                next_expected_sequence_number = sequence_number + 1;
+                change_state(CONNECTED);
+                pthread_cond_signal(&app_thread_sig);
+                pthread_cond_wait(&send_thread_sig, &send_thread_sig_mutex);
+
             }
                 break;
             case CONNECTED:
@@ -317,6 +329,8 @@ static void *send_thread() {
 }
 
 static void *receive_thread() {
+    pthread_mutex_lock(&app_thread_sig_mutex);
+    pthread_mutex_lock(&send_thread_sig_mutex);
     do {
         ssize_t len;
         char packet_buffer[MAX_PACKET_SIZE];
@@ -344,7 +358,9 @@ static void *receive_thread() {
                         printf("SYN_ACK packet #%d received", last_received_sequence_number);
                         change_state(CONNECTING_SYN_ACK_RECEIVED);
                         sequence_number++;
+                        send_thread_should_wake = true;
                         pthread_cond_signal(&send_thread_sig);
+                        pthread_mutex_unlock(&send_thread_sig_mutex);
                     } else {
                         printf("Type [%d] packet received", get_packet_type(packet_buffer));
                     }
@@ -385,12 +401,20 @@ void mtcp_connect(int socket_fd, struct sockaddr_in *server_addr) {
     //create a large enough init buffer
     send_buffer = malloc(send_buffer_max_size);
     receive_buffer = malloc(receive_buffer_max_size);
-    //create the two thread
-    pthread_create(&send_thread_pid, NULL, (void *(*)(void *)) send_thread, NULL);
-    pthread_create(&recv_thread_pid, NULL, (void *(*)(void *)) receive_thread, NULL);
     change_state(CONNECTING_START);
-    pthread_cond_wait(&app_thread_sig, &app_thread_sig_mutex);
+
+    //create the two thread
+    pthread_create(&recv_thread_pid, NULL, (void *(*)(void *)) receive_thread, NULL);
+    pthread_create(&send_thread_pid, NULL, (void *(*)(void *)) send_thread, NULL);
+    sleep(1);
+    pthread_mutex_lock(&app_thread_sig_mutex);
+    while (!app_thread_should_wake) {
+        pthread_cond_wait(&app_thread_sig, &app_thread_sig_mutex);
+    }
+    pthread_mutex_unlock(&app_thread_sig_mutex);
+
     printf("Successfully connected to server\n");
+
     /* char recvBuff[100];
      char *buff = "hello";
  
