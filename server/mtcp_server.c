@@ -14,7 +14,7 @@
 typedef enum server_state {
     CLOSED,
     CONNECTING_START, CONNECTING_SYN_RECEIVED, CONNECTING_SYN_ACK_SENT, CONNECTED,
-
+    WAIT_FOR_DATA, DATA_RECEIVED, DATA_ACK_SENT,
     DATA_TRANSMITTING, DISCONNECTING,
     OTHER
 
@@ -56,6 +56,7 @@ PacketType last_packet_type = UNDEFINED;
 uint32_t sequence_number = 0;
 uint32_t last_received_sequence_number = 0;
 uint32_t next_expected_sequence_number = 0;
+ssize_t last_received_packet_length = 0;
 
 volatile bool receive_thread_should_stop = false;
 volatile bool send_thread_should_stop = false;
@@ -99,58 +100,16 @@ void change_state(ServerState serverState) {
             break;
         case OTHER:
             break;
+        case WAIT_FOR_DATA:
+            break;
+        case DATA_RECEIVED:
+            break;
+        case DATA_ACK_SENT:
+            break;
     }
 }
 
-void mtcp_accept(int socket_fd, struct sockaddr_in *server_addr) {
-    // Initialize mutex for send_thread and receive_thread
-    //not necessary as PTHREAD_MUTEX_INITIALIZER does the same
-//    pthread_mutex_init(&send_thread_sig_mutex, NULL);
-//    pthread_mutex_init(&app_thread_sig_mutex, NULL);
 
-    sd = socket_fd;
-    client_addr = malloc(sizeof(struct sockaddr_in));
-    memcpy(client_addr, server_addr, sizeof(struct sockaddr_in));
-    // initialize size variable which is used later
-    addrLen = sizeof(struct sockaddr_in);
-    struct timeval tv;
-    tv.tv_sec = 1;  /* 1 Secs Timeout */
-    tv.tv_usec = 0;  // Not init'ing this can cause strange errors
-    setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, (const char *) &tv, sizeof(struct timeval));
-    //create a large enough init buffer
-    send_buffer = malloc(send_buffer_max_size);
-    receive_buffer = malloc(receive_buffer_max_size);
-
-    // begin connection
-    pthread_create(&recv_thread_pid, NULL, (void *(*)(void *)) receive_thread, NULL);
-    pthread_create(&send_thread_pid, NULL, (void *(*)(void *)) send_thread, NULL);
-    change_state(CONNECTING_START);
-
-    struct timespec ts;
-    ts.tv_nsec = 100000000;
-    ts.tv_sec = 0;
-    nanosleep(&ts, NULL);
-
-    pthread_mutex_lock(&app_thread_sig_mutex);
-    while (!app_thread_should_wake) {
-        pthread_cond_wait(&app_thread_sig, &app_thread_sig_mutex);
-    }
-    app_thread_should_wake = false;
-    pthread_mutex_unlock(&app_thread_sig_mutex);
-
-    printf("Successfully connected to client\n");
-
-
-
-}
-
-int mtcp_read(int socket_fd, unsigned char *buf, int buf_len) {
-    return 0;
-}
-
-void mtcp_close(int socket_fd) {
-
-}
 
 
 /*
@@ -316,6 +275,15 @@ uint32_t get_packet_seq(char *packet_buffer) {
     return seq;
 }
 
+char *get_packet_data(char *packet_buffer) {
+    return packet_buffer + 4;
+}
+
+size_t get_packet_data_size(ssize_t len){
+    return (size_t) (len - 4);
+}
+
+
 static void *send_thread() {
     int ackBuff = 0;
 //    pthread_cond_wait(&send_thread_sig, &send_thread_sig_mutex);
@@ -372,6 +340,21 @@ static void *send_thread() {
             case DISCONNECTING:
                 break;
             case OTHER:
+                break;
+            case WAIT_FOR_DATA: {
+                pthread_mutex_lock(&send_thread_sig_mutex);
+                while (!send_thread_should_wake) {
+                    pthread_cond_wait(&send_thread_sig, &send_thread_sig_mutex);
+                }
+                send_thread_should_wake = false;
+                pthread_mutex_unlock(&send_thread_sig_mutex);
+            }
+                break;
+            case DATA_RECEIVED: {
+
+            }
+                break;
+            case DATA_ACK_SENT:
                 break;
         }
 
@@ -443,6 +426,27 @@ static void *receive_thread() {
                     break;
                 case OTHER:
                     break;
+                case WAIT_FOR_DATA: {
+                    pthread_mutex_lock(&app_thread_sig_mutex);
+                    pthread_mutex_lock(&send_thread_sig_mutex);
+                    last_received_sequence_number = get_packet_seq(packet_buffer);
+                    last_received_packet_length = len;
+
+                    change_state(DATA_RECEIVED);
+                    pthread_mutex_trylock(&send_thread_sig_mutex);
+                    send_thread_should_wake = true;
+                    pthread_cond_signal(&send_thread_sig);
+                    pthread_mutex_unlock(&send_thread_sig_mutex);
+
+                    char* data_buffer = get_packet_data(packet_buffer);
+                    size_t data_size = get_packet_data_size(len);
+                    enqueue_receive_buffer(data_buffer, data_size);
+                }
+                    break;
+                case DATA_RECEIVED:
+                    break;
+                case DATA_ACK_SENT:
+                    break;
             }
         }
         if (state == OTHER) {
@@ -464,4 +468,65 @@ static void *receive_thread() {
         printf("receive error: %s (Errno:%d)\n", strerror(errno), errno);
     }
     pthread_cond_signal(&app_thread_sig);*/
+}
+
+void mtcp_accept(int socket_fd, struct sockaddr_in *server_addr) {
+    // Initialize mutex for send_thread and receive_thread
+    //not necessary as PTHREAD_MUTEX_INITIALIZER does the same
+//    pthread_mutex_init(&send_thread_sig_mutex, NULL);
+//    pthread_mutex_init(&app_thread_sig_mutex, NULL);
+
+    sd = socket_fd;
+    client_addr = malloc(sizeof(struct sockaddr_in));
+    memcpy(client_addr, server_addr, sizeof(struct sockaddr_in));
+    // initialize size variable which is used later
+    addrLen = sizeof(struct sockaddr_in);
+    struct timeval tv;
+    tv.tv_sec = 1;  /* 1 Secs Timeout */
+    tv.tv_usec = 0;  // Not init'ing this can cause strange errors
+    setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, (const char *) &tv, sizeof(struct timeval));
+    //create a large enough init buffer
+    send_buffer = malloc(send_buffer_max_size);
+    receive_buffer = malloc(receive_buffer_max_size);
+
+    // begin connection
+    pthread_create(&recv_thread_pid, NULL, (void *(*)(void *)) receive_thread, NULL);
+    pthread_create(&send_thread_pid, NULL, (void *(*)(void *)) send_thread, NULL);
+    change_state(CONNECTING_START);
+
+    struct timespec ts;
+    ts.tv_nsec = 100000000;
+    ts.tv_sec = 0;
+    nanosleep(&ts, NULL);
+
+    pthread_mutex_lock(&app_thread_sig_mutex);
+    while (!app_thread_should_wake) {
+        pthread_cond_wait(&app_thread_sig, &app_thread_sig_mutex);
+    }
+    app_thread_should_wake = false;
+    pthread_mutex_unlock(&app_thread_sig_mutex);
+
+    printf("Successfully connected to client\n");
+
+
+
+}
+
+
+int mtcp_read(int socket_fd, unsigned char *buf, int buf_len) {
+    change_state(WAIT_FOR_DATA);
+    pthread_mutex_lock(&app_thread_sig_mutex);
+    while (!app_thread_should_wake) {
+        pthread_cond_wait(&app_thread_sig, &app_thread_sig_mutex);
+    }
+    app_thread_should_wake = false;
+    pthread_mutex_unlock(&app_thread_sig_mutex);
+
+    printf("Successfully read from the server\n");
+    //temp
+    return 0;
+}
+
+void mtcp_close(int socket_fd) {
+
 }
