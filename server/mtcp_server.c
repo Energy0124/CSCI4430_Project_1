@@ -514,7 +514,7 @@ void mtcp_accept(int socket_fd, struct sockaddr_in *server_addr) {
 
 
 int mtcp_read(int socket_fd, unsigned char *buf, int buf_len) {
-    change_state(WAIT_FOR_DATA);
+/*    change_state(WAIT_FOR_DATA);
     pthread_mutex_lock(&app_thread_sig_mutex);
     while (!app_thread_should_wake) {
         pthread_cond_wait(&app_thread_sig, &app_thread_sig_mutex);
@@ -522,7 +522,7 @@ int mtcp_read(int socket_fd, unsigned char *buf, int buf_len) {
     app_thread_should_wake = false;
     pthread_mutex_unlock(&app_thread_sig_mutex);
 
-    printf("Successfully read from the server\n");
+    printf("Successfully read from the server\n");*/
     //temp
     return 0;
 }
