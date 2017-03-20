@@ -1,17 +1,14 @@
 #include <netinet/in.h>
-# include <netinet/udp.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <time.h>
 #include <unistd.h>
 #include "mtcp_server.h"
 #include "mtcp_common.h"
 # include <errno.h>
 # include <sys/socket.h>
 #include <stdbool.h>
-# include <sys/types.h>
 
 
 typedef enum server_state {
@@ -111,8 +108,10 @@ void mtcp_accept(int socket_fd, struct sockaddr_in *server_addr) {
 //    pthread_mutex_init(&app_thread_sig_mutex, NULL);
 
     sd = socket_fd;
-    client_addr = server_addr;
-    addrLen = sizeof(client_addr);
+    client_addr = malloc(sizeof(struct sockaddr_in));
+    memcpy(client_addr, server_addr, sizeof(struct sockaddr_in));
+    // initialize size variable which is used later
+    addrLen = sizeof(struct sockaddr_in);
     struct timeval tv;
     tv.tv_sec = 1;  /* 1 Secs Timeout */
     tv.tv_usec = 0;  // Not init'ing this can cause strange errors
@@ -125,14 +124,20 @@ void mtcp_accept(int socket_fd, struct sockaddr_in *server_addr) {
     pthread_create(&send_thread_pid, NULL, (void *(*)(void *)) send_thread, NULL);
     pthread_create(&recv_thread_pid, NULL, (void *(*)(void *)) receive_thread, NULL);
     change_state(CONNECTING_START);
+
+    struct timespec ts;
+    ts.tv_nsec = 100000000;
+    ts.tv_sec = 0;
+    nanosleep(&ts, NULL);
+
     pthread_mutex_lock(&app_thread_sig_mutex);
     while (!app_thread_should_wake) {
         pthread_cond_wait(&app_thread_sig, &app_thread_sig_mutex);
     }
+    app_thread_should_wake = false;
     pthread_mutex_unlock(&app_thread_sig_mutex);
 
     printf("Successfully connected to client\n");
-
 
 
 }
@@ -311,7 +316,7 @@ uint32_t get_packet_seq(char *packet_buffer) {
 
 static void *send_thread() {
     int ackBuff = 0;
-    pthread_cond_wait(&send_thread_sig, &send_thread_sig_mutex);
+//    pthread_cond_wait(&send_thread_sig, &send_thread_sig_mutex);
     do {
         switch (state) {
             case CLOSED:
@@ -328,10 +333,15 @@ static void *send_thread() {
                     exit(0);
                 }
                 free(buff);
-                printf("SYN_ACK packet #%d sent", sequence_number);
+                printf("SYN_ACK packet #%d sent\n", sequence_number);
                 next_expected_sequence_number = sequence_number;
                 change_state(CONNECTING_SYN_ACK_SENT);
-                pthread_cond_wait(&send_thread_sig, &send_thread_sig_mutex);
+                pthread_mutex_lock(&send_thread_sig_mutex);
+                while (!send_thread_should_wake) {
+                    pthread_cond_wait(&send_thread_sig, &send_thread_sig_mutex);
+                }
+                send_thread_should_wake = false;
+                pthread_mutex_unlock(&send_thread_sig_mutex);
             }
                 break;
             case CONNECTING_SYN_ACK_SENT:
@@ -356,6 +366,8 @@ static void *send_thread() {
 }
 
 static void *receive_thread() {
+    pthread_mutex_lock(&app_thread_sig_mutex);
+    pthread_mutex_lock(&send_thread_sig_mutex);
     do {
         ssize_t len;
         char packet_buffer[MAX_PACKET_SIZE];
@@ -369,13 +381,18 @@ static void *receive_thread() {
                 case CONNECTING_START: {
                     last_packet_type = get_packet_type(packet_buffer);
                     last_received_sequence_number = get_packet_seq(packet_buffer);
+//                    printf("%d %d %d\n", last_packet_type, last_received_sequence_number,
+//                           next_expected_sequence_number);
                     if (last_packet_type == SYN && last_received_sequence_number == next_expected_sequence_number) {
-                        printf("SYN_ACK packet #%d received", last_received_sequence_number);
-                        change_state(CONNECTING_SYN_RECEIVED);
+                        printf("SYN packet #%d received\n", last_received_sequence_number);
                         sequence_number = last_received_sequence_number + 1;
+                        change_state(CONNECTING_SYN_RECEIVED);
+                        pthread_mutex_trylock(&send_thread_sig_mutex);
+                        send_thread_should_wake = true;
                         pthread_cond_signal(&send_thread_sig);
+                        pthread_mutex_unlock(&send_thread_sig_mutex);
                     } else {
-                        printf("Type [%d] packet received", get_packet_type(packet_buffer));
+                        printf("Type [%d] packet received\n", last_packet_type);
                     }
                 }
                     break;
@@ -385,12 +402,15 @@ static void *receive_thread() {
                     last_packet_type = get_packet_type(packet_buffer);
                     last_received_sequence_number = get_packet_seq(packet_buffer);
                     if (last_packet_type == ACK && last_received_sequence_number == next_expected_sequence_number) {
-                        printf("ACK packet #%d received", last_received_sequence_number);
+                        printf("ACK packet #%d received\n", last_received_sequence_number);
                         change_state(CONNECTED);
                         sequence_number = last_received_sequence_number + 1;
+                        pthread_mutex_trylock(&app_thread_sig_mutex);
+                        app_thread_should_wake = false;
                         pthread_cond_signal(&app_thread_sig);
+                        pthread_mutex_unlock(&app_thread_sig_mutex);
                     } else {
-                        printf("Type [%d] packet received", get_packet_type(packet_buffer));
+                        printf("Type [%d] packet received\n", last_packet_type);
                     }
                 }
                     break;
