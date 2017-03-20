@@ -47,8 +47,10 @@ size_t receive_buffer_current_size = 0;
 
 //client state
 ClientState state = CLOSED;
-PacketType lastPacketType = UNDEFINED;
-int sequence_number = 0;
+PacketType last_packet_type = UNDEFINED;
+uint32_t sequence_number = 0;
+uint32_t last_received_sequence_number = 0;
+uint32_t next_expected_sequence_number = 0;
 
 int socket_file_descriptor;
 struct sockaddr_in *server_address;
@@ -227,6 +229,29 @@ void change_state(ClientState clientState) {
     pthread_mutex_lock(&info_mutex);
     state = clientState;
     pthread_mutex_unlock(&info_mutex);
+    switch (state) {
+
+        case CLOSED:
+            break;
+        case CONNECTING_START:
+            printf("CONNECTING_START\n");
+            break;
+        case CONNECTING_SYN_SENT:
+            printf("CONNECTING_SYN_SENT\n");
+            break;
+        case CONNECTING_SYN_ACK_RECEIVED:
+            printf("CONNECTING_SYN_ACK_RECEIVED\n");
+            break;
+        case CONNECTED:
+            printf("CONNECTED\n");
+            break;
+        case DATA_TRANSMITTING:
+            break;
+        case DISCONNECTING:
+            break;
+        case OTHER:
+            break;
+    }
 }
 
 static void *send_thread() {
@@ -241,23 +266,38 @@ static void *send_thread() {
                 break;
             case CONNECTING_START: {
                 size_t packet_size;
-                char *buff = construct_packet(SYN, 0, NULL, 0, &packet_size);
+                char *buff = construct_packet(SYN, sequence_number, NULL, 0, &packet_size);
                 ssize_t len;
                 if ((len = sendto(socket_file_descriptor, buff, strlen(buff), 0, (struct sockaddr *) server_address,
                                   address_length)) <= 0) {
                     printf("Send Error: %s (Errno:%d)\n", strerror(errno), errno);
                     exit(0);
                 } else {
-                    printf("SYN packet sent");
-
+                    printf("SYN packet #%d sent", sequence_number);
+                    next_expected_sequence_number = sequence_number + 1;
+                    change_state(CONNECTING_SYN_SENT);
+                    pthread_cond_wait(&send_thread_sig, &send_thread_sig_mutex);
                 }
-                change_state(CONNECTING_SYN_SENT);
-                pthread_cond_wait(&send_thread_sig, &send_thread_sig_mutex);
             }
                 break;
             case CONNECTING_SYN_SENT:
                 break;
-            case CONNECTING_SYN_ACK_RECEIVED:
+            case CONNECTING_SYN_ACK_RECEIVED: {
+                size_t packet_size;
+                char *buff = construct_packet(ACK, sequence_number, NULL, 0, &packet_size);
+                ssize_t len;
+                if ((len = sendto(socket_file_descriptor, buff, strlen(buff), 0, (struct sockaddr *) server_address,
+                                  address_length)) <= 0) {
+                    printf("Send Error: %s (Errno:%d)\n", strerror(errno), errno);
+                    exit(0);
+                } else {
+                    printf("ACK packet #%d sent", sequence_number);
+                    next_expected_sequence_number = sequence_number + 1;
+                    change_state(CONNECTED);
+                    pthread_cond_signal(&app_thread_sig);
+                    pthread_cond_wait(&send_thread_sig, &send_thread_sig_mutex);
+                }
+            }
                 break;
             case CONNECTED:
                 break;
@@ -298,9 +338,13 @@ static void *receive_thread() {
 //                        printf("Recv Error: %s (Errno:%d)\n", strerror(errno), errno);
 //                        exit(0);
 //                    } else {
-                    if (get_packet_type(packet_buffer) == SYN_ACK && get_packet_seq(packet_buffer) == 1) {
-                        printf("SYN_ACK packet received");
+                    last_packet_type = get_packet_type(packet_buffer);
+                    last_received_sequence_number = get_packet_seq(packet_buffer);
+                    if (last_packet_type == SYN_ACK && last_received_sequence_number == next_expected_sequence_number) {
+                        printf("SYN_ACK packet #%d received", last_received_sequence_number);
                         change_state(CONNECTING_SYN_ACK_RECEIVED);
+                        sequence_number++;
+                        pthread_cond_signal(&send_thread_sig);
                     } else {
                         printf("Type [%d] packet received", get_packet_type(packet_buffer));
                     }
@@ -337,7 +381,7 @@ void mtcp_connect(int socket_fd, struct sockaddr_in *server_addr) {
 
     server_address = server_addr;
     // initialize size variable which is used later
-    address_length = sizeof(server_addr);
+    address_length = sizeof(server_address);
     //create a large enough init buffer
     send_buffer = malloc(send_buffer_max_size);
     receive_buffer = malloc(receive_buffer_max_size);
@@ -346,7 +390,7 @@ void mtcp_connect(int socket_fd, struct sockaddr_in *server_addr) {
     pthread_create(&recv_thread_pid, NULL, (void *(*)(void *)) receive_thread, NULL);
     change_state(CONNECTING_START);
     pthread_cond_wait(&app_thread_sig, &app_thread_sig_mutex);
-
+    printf("Successfully connected to server\n");
     /* char recvBuff[100];
      char *buff = "hello";
  

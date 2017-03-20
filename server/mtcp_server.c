@@ -43,7 +43,7 @@ static pthread_mutex_t info_mutex = PTHREAD_MUTEX_INITIALIZER;
 struct sockaddr_in *client_addr;
 int sd;
 ServerState state = CLOSED;
-PacketType lastPacketType = UNDEFINED;
+PacketType last_packet_type = UNDEFINED;
 
 socklen_t addrLen;
 char buff[1000];
