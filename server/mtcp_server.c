@@ -15,7 +15,7 @@ typedef enum server_state {
     CLOSED,
     CONNECTING_START, CONNECTING_SYN_RECEIVED, CONNECTING_SYN_ACK_SENT, CONNECTED,
     WAIT_FOR_DATA, DATA_RECEIVED, DATA_ACK_SENT,
-    DISCONNECTING_START, DISCONNECTING_SYN_ACK_SENT, DISCONNECTING_FIN_RECEIVED, DISCONNECTING,
+    DISCONNECTING_START, DISCONNECTING_FIN_ACK_SENT, DISCONNECTING_FIN_RECEIVED, DISCONNECTING,
     DATA_TRANSMITTING,
     OTHER
 
@@ -109,7 +109,7 @@ void change_state(ServerState serverState) {
             break;
         case DISCONNECTING_START:
             break;
-        case DISCONNECTING_SYN_ACK_SENT:
+        case DISCONNECTING_FIN_ACK_SENT:
             break;
         case DISCONNECTING_FIN_RECEIVED:
             break;
@@ -387,9 +387,26 @@ static void *send_thread() {
                 break;
             case DISCONNECTING_START:
                 break;
-            case DISCONNECTING_SYN_ACK_SENT:
+            case DISCONNECTING_FIN_ACK_SENT:
                 break;
             case DISCONNECTING_FIN_RECEIVED:
+            {
+                size_t packet_size;
+                char *buff = construct_packet(FIN_ACK, sequence_number, NULL, 0, &packet_size);
+                ssize_t len;
+                // send response(FIN_ACK) to the client
+                if ((len = sendto(sd, buff, packet_size, 0, (struct sockaddr *) client_addr, addrLen)) <= 0) {
+                    printf("Send Error: %s (Errno:%d)\n", strerror(errno), errno);
+                    exit(0);
+                }
+                free(buff);
+                printf("FIN_ACK packet #%d sent\n", sequence_number);
+                next_expected_sequence_number = sequence_number;
+                change_state(DISCONNECTING_FIN_ACK_SENT);
+                pthread_exit(0);
+
+            }
+
                 break;
         }
 
@@ -513,7 +530,7 @@ static void *receive_thread() {
                     }
                 }
                     break;
-                case DISCONNECTING_SYN_ACK_SENT:
+                case DISCONNECTING_FIN_ACK_SENT:
                     break;
                 case DISCONNECTING_FIN_RECEIVED:
                     break;
@@ -621,4 +638,8 @@ void mtcp_close(int socket_fd) {
     }
     app_thread_should_wake = false;
     pthread_mutex_unlock(&app_thread_sig_mutex);
+
+    pthread_join(send_thread_pid,NULL);
+    pthread_join(recv_thread_pid,NULL);
+
 }
