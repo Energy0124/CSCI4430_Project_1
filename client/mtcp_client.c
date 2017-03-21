@@ -65,7 +65,7 @@ volatile bool send_thread_should_stop = false;
 
 bool app_thread_should_wake = false;
 bool send_thread_should_wake = false;
-int sendto_status = 0;
+ssize_t sendto_len = 0;
 
 
 /*
@@ -83,48 +83,58 @@ unsigned char *enqueue_buffer(unsigned char *target_buffer, size_t *target_buffe
         *target_buffer_max_size_ptr = (source_buffer_size + *target_buffer_max_size_ptr) * 2;
         unsigned char *new_target_buffer = realloc(target_buffer, *target_buffer_max_size_ptr);
         if (new_target_buffer != NULL) {
-            return new_target_buffer;
+            printf("Realloced buffer!\n");
+            memcpy(new_target_buffer, target_buffer, *target_buffer_max_size_ptr);
+            free(target_buffer);
+            target_buffer = new_target_buffer;
+
         } else {
             printf("Realloc buffer failed!\n");
             return NULL;
         }
-    } else {
-        memcpy(target_buffer + *target_buffer_current_size_ptr, source_buffer, source_buffer_size);
-        *target_buffer_current_size_ptr += source_buffer_size;
-        return target_buffer;
     }
+    memcpy(target_buffer + *target_buffer_current_size_ptr, source_buffer, source_buffer_size);
+    *target_buffer_current_size_ptr += source_buffer_size;
+//    printf("just enqueued: %d, currently have: %d\n", source_buffer_size, *target_buffer_current_size_ptr);
+    return target_buffer;
+
 }
 
 /*
  * wrapper of enqueue_buffer for send buffer
  */
 unsigned char *enqueue_send_buffer(unsigned char *source_buffer, size_t source_buffer_size) {
-    return enqueue_buffer(send_buffer, &send_buffer_current_size, &send_buffer_max_size, source_buffer, source_buffer_size);
+    return send_buffer = enqueue_buffer(send_buffer, &send_buffer_current_size, &send_buffer_max_size, source_buffer,
+                                        source_buffer_size);
 }
 
 /*
  * wrapper of enqueue_buffer for receive buffer
  */
 unsigned char *enqueue_receive_buffer(unsigned char *source_buffer, size_t source_buffer_size) {
-    return enqueue_buffer(receive_buffer, &receive_buffer_current_size, &receive_buffer_max_size, source_buffer,
-                   source_buffer_size);
+    return receive_buffer = enqueue_buffer(receive_buffer, &receive_buffer_current_size, &receive_buffer_max_size,
+                                        source_buffer,
+                                        source_buffer_size);
 }
 
 
 /*
  * get the first N bytes from buffer and remove them from the buffer
  * the got buffer will then be stored in dequeued_buffer
- * it will return the new target_buffer_current_size
+ * it will return actual dequeued size
  */
 size_t dequeue_buffer(unsigned char *target_buffer, size_t *target_buffer_current_size_ptr,
                       unsigned char *dequeued_buffer, size_t dequeued_buffer_size) {
     if (*target_buffer_current_size_ptr < dequeued_buffer_size) {
         printf("target_buffer_current_size < dequeued_buffer_size!\n");
-        return 0;
+        dequeued_buffer_size = *target_buffer_current_size_ptr;
     }
-    memcpy(dequeued_buffer, target_buffer, dequeued_buffer_size);
-    memmove(target_buffer, target_buffer + (int) dequeued_buffer_size, dequeued_buffer_size);
-    return *target_buffer_current_size_ptr -= dequeued_buffer_size;
+    if (dequeued_buffer != NULL) {
+        memcpy(dequeued_buffer, target_buffer, dequeued_buffer_size);
+        memmove(target_buffer, target_buffer + (int) dequeued_buffer_size, dequeued_buffer_size);
+    }
+    *target_buffer_current_size_ptr -= dequeued_buffer_size;
+    return dequeued_buffer_size;
 }
 
 
@@ -161,8 +171,11 @@ int encode_header_to_packet(PacketType type, uint32_t seq, unsigned char *header
  */
 char decode_header_from_packet(PacketType *type_ptr, uint32_t *seq_ptr, unsigned char *header_buffer) {
     *type_ptr = (PacketType) (header_buffer[0] >> 4);
-    header_buffer[0] = header_buffer[0] & (char) 0x0F;
-    memcpy(seq_ptr, header_buffer, 4);
+    unsigned char *seq = malloc(4);
+    memcpy(seq, header_buffer, 4);
+    seq[0] = header_buffer[0] & (char) 0x0F;
+    memcpy(seq_ptr, seq, 4);
+    free(seq);
     *seq_ptr = ntohl(*seq_ptr);
     return *type_ptr;
 
@@ -234,6 +247,7 @@ uint32_t get_packet_seq(unsigned char *packet_buffer) {
     decode_header_from_packet(&type, &seq, packet_buffer);
     return seq;
 }
+
 /*
  * return the packet data
  */
@@ -304,9 +318,9 @@ static void *send_thread() {
         ts.tv_nsec = tv.tv_usec * 1000 + 1000 * 1000 * (timeInMs % 1000);
         ts.tv_sec += ts.tv_nsec / (1000 * 1000 * 1000);
         ts.tv_nsec %= (1000 * 1000 * 1000);
-//        pthread_mutex_lock(&send_thread_sig_mutex);
+        pthread_mutex_lock(&send_thread_sig_mutex);
         pthread_cond_timedwait(&send_thread_sig, &send_thread_sig_mutex, &ts);
-//        pthread_mutex_unlock(&send_thread_sig_mutex);
+        pthread_mutex_unlock(&send_thread_sig_mutex);
 
         switch (state) {
             case CLOSED:
@@ -327,8 +341,9 @@ static void *send_thread() {
                 socklen_t addrLen = sizeof(server_addr);*/
 
                 ssize_t len;
-                if ((len = sendto(socket_file_descriptor, buff, packet_size, 0, (struct sockaddr *) server_address,
-                                  address_length)) <= 0) {
+                if ((sendto_len = sendto(socket_file_descriptor, buff, packet_size, 0,
+                                         (struct sockaddr *) server_address,
+                                         address_length)) <= 0) {
 //                if ((len = sendto(socket_file_descriptor, buff, packet_size, 0, (struct sockaddr *) &server_addr,
 //                                  addrLen)) <= 0) {
                     printf("Send Error: %s (Errno:%d)\n", strerror(errno), errno);
@@ -352,8 +367,9 @@ static void *send_thread() {
                 size_t packet_size;
                 unsigned char *buff = construct_packet(ACK, sequence_number, NULL, 0, &packet_size);
                 ssize_t len;
-                if ((len = sendto(socket_file_descriptor, buff, packet_size, 0, (struct sockaddr *) server_address,
-                                  address_length)) <= 0) {
+                if ((sendto_len = sendto(socket_file_descriptor, buff, packet_size, 0,
+                                         (struct sockaddr *) server_address,
+                                         address_length)) <= 0) {
                     printf("Send Error: %s (Errno:%d)\n", strerror(errno), errno);
                     exit(0);
                 }
@@ -390,16 +406,22 @@ static void *send_thread() {
                 data = send_buffer;
 
                 size_t packet_size;
-                unsigned char *buff = construct_packet(ACK, sequence_number, data, data_size, &packet_size);
+                unsigned char *buff = construct_packet(DATA, sequence_number, data, data_size, &packet_size);
                 ssize_t len;
-                if ((len = sendto(socket_file_descriptor, buff, packet_size, 0, (struct sockaddr *) server_address,
-                                  address_length)) <= 0) {
+                if ((sendto_len = sendto(socket_file_descriptor, buff, packet_size, 0,
+                                         (struct sockaddr *) server_address,
+                                         address_length)) <= 0) {
+
                     printf("Send Error: %s (Errno:%d)\n", strerror(errno), errno);
                     free(buff);
+//                    pthread_mutex_trylock(&app_thread_sig_mutex);
+//                    app_thread_should_wake = true;
+//                    pthread_cond_signal(&app_thread_sig);
+//                    pthread_mutex_unlock(&app_thread_sig_mutex);
                     break;
                 }
                 free(buff);
-                printf("DATA packet #%d sent\n", sequence_number);
+                printf("DATA(%d) packet #%d sent\n", (int) data_size, sequence_number);
                 last_sent_data_size = data_size;
                 next_expected_sequence_number = (uint32_t) (sequence_number + data_size);
                 change_state(DATA_TRANSMITTING_DATA_SENT);
@@ -417,20 +439,26 @@ static void *send_thread() {
                 } else if (send_buffer_current_size >= 0) {
                     data_size = send_buffer_current_size;
                 } else {
+                    change_state(CONNECTED);
                     break;
                 }
                 data = send_buffer;
                 size_t packet_size;
-                unsigned char *buff = construct_packet(ACK, sequence_number, data, data_size, &packet_size);
+                unsigned char *buff = construct_packet(DATA, sequence_number, data, data_size, &packet_size);
                 ssize_t len;
-                if ((len = sendto(socket_file_descriptor, buff, packet_size, 0, (struct sockaddr *) server_address,
-                                  address_length)) <= 0) {
+                if ((sendto_len = sendto(socket_file_descriptor, buff, packet_size, 0,
+                                         (struct sockaddr *) server_address,
+                                         address_length)) <= 0) {
                     printf("Send Error: %s (Errno:%d)\n", strerror(errno), errno);
                     free(buff);
+//                    pthread_mutex_trylock(&app_thread_sig_mutex);
+//                    app_thread_should_wake = true;
+//                    pthread_cond_signal(&app_thread_sig);
+//                    pthread_mutex_unlock(&app_thread_sig_mutex);
                     break;
                 }
                 free(buff);
-                printf("DATA packet #%d sent\n", sequence_number);
+                printf("DATA(%d) packet #%d sent\n", data_size, sequence_number);
                 last_sent_data_size = data_size;
                 next_expected_sequence_number = (uint32_t) (sequence_number + data_size);
                 change_state(DATA_TRANSMITTING_DATA_SENT);
@@ -441,7 +469,7 @@ static void *send_thread() {
                 size_t data_size;
                 if (send_buffer_current_size > 1000) {
                     data_size = 1000;
-                } else if (send_buffer_current_size >= 0) {
+                } else if (send_buffer_current_size > 0) {
                     data_size = send_buffer_current_size;
                 } else {
                     change_state(CONNECTED);
@@ -449,16 +477,21 @@ static void *send_thread() {
                 }
                 data = send_buffer;
                 size_t packet_size;
-                unsigned char *buff = construct_packet(ACK, sequence_number, data, data_size, &packet_size);
+                unsigned char *buff = construct_packet(DATA, sequence_number, data, data_size, &packet_size);
                 ssize_t len;
-                if ((len = sendto(socket_file_descriptor, buff, packet_size, 0, (struct sockaddr *) server_address,
-                                  address_length)) <= 0) {
+                if ((sendto_len = sendto(socket_file_descriptor, buff, packet_size, 0,
+                                         (struct sockaddr *) server_address,
+                                         address_length)) <= 0) {
                     printf("Send Error: %s (Errno:%d)\n", strerror(errno), errno);
                     free(buff);
+//                    pthread_mutex_trylock(&app_thread_sig_mutex);
+//                    app_thread_should_wake = true;
+//                    pthread_cond_signal(&app_thread_sig);
+//                    pthread_mutex_unlock(&app_thread_sig_mutex);
                     break;
                 }
                 free(buff);
-                printf("DATA packet #%d sent\n", sequence_number);
+                printf("DATA(%d) packet #%d sent\n", (int) data_size, sequence_number);
                 last_sent_data_size = data_size;
                 next_expected_sequence_number = (uint32_t) (sequence_number + data_size);
 
@@ -482,7 +515,7 @@ static void *send_thread() {
 
 static void *receive_thread() {
     pthread_mutex_trylock(&app_thread_sig_mutex);
-    pthread_mutex_trylock(&send_thread_sig_mutex);
+//    pthread_mutex_trylock(&send_thread_sig_mutex);
     do {
         ssize_t len;
         unsigned char packet_buffer[MAX_PACKET_SIZE];
@@ -507,8 +540,8 @@ static void *receive_thread() {
                     pthread_mutex_trylock(&send_thread_sig_mutex);
                     last_packet_type = get_packet_type(packet_buffer);
                     last_received_sequence_number = get_packet_seq(packet_buffer);
-//                    printf("%d %d %d\n", last_packet_type, last_received_sequence_number,
-//                           next_expected_sequence_number);
+                    printf("%d %d %d\n", last_packet_type, last_received_sequence_number,
+                           next_expected_sequence_number);
                     if (last_packet_type == SYN_ACK && last_received_sequence_number == next_expected_sequence_number) {
                         printf("SYN_ACK packet #%d received\n", last_received_sequence_number);
                         change_state(CONNECTING_SYN_ACK_RECEIVED);
@@ -530,21 +563,23 @@ static void *receive_thread() {
                 case DATA_TRANSMITTING_START:
                     break;
                 case DATA_TRANSMITTING_DATA_SENT:
-                    pthread_mutex_trylock(&send_thread_sig_mutex);
+//                    pthread_mutex_trylock(&send_thread_sig_mutex);
                     last_packet_type = get_packet_type(packet_buffer);
                     last_received_sequence_number = get_packet_seq(packet_buffer);
 //                    printf("%d %d %d\n", last_packet_type, last_received_sequence_number,
 //                           next_expected_sequence_number);
-                    if (last_packet_type == DATA && last_received_sequence_number == next_expected_sequence_number) {
-                        printf("DATA packet #%d received\n", last_received_sequence_number);
+                    if (last_packet_type == ACK && last_received_sequence_number == next_expected_sequence_number) {
+                        printf("ACK packet #%d received\n", last_received_sequence_number);
                         change_state(DATA_TRANSMITTING_ACK_RECEIVED);
-                        sequence_number = last_received_sequence_number + 1;
+                        sequence_number = last_received_sequence_number;
+                        //data is sent so now we remove the sent data from buffer
+                        dequeue_send_buffer(NULL, last_sent_data_size);
                         pthread_mutex_trylock(&send_thread_sig_mutex);
                         send_thread_should_wake = true;
                         pthread_cond_signal(&send_thread_sig);
                         pthread_mutex_unlock(&send_thread_sig_mutex);
                     } else {
-                        printf("Type [%d] packet received\n", last_packet_type);
+                        printf("Type [%d][%d] packet received\n", last_packet_type, last_received_sequence_number);
                     }
                     break;
                 case DATA_TRANSMITTING_ACK_RECEIVED:
@@ -585,10 +620,12 @@ void mtcp_connect(int socket_fd, struct sockaddr_in *server_addr) {
     pthread_create(&recv_thread_pid, NULL, (void *(*)(void *)) receive_thread, NULL);
     pthread_create(&send_thread_pid, NULL, (void *(*)(void *)) send_thread, NULL);
     //sleep(1);
+/*
     struct timespec ts;
     ts.tv_nsec = 100000000;
     ts.tv_sec = 0;
     nanosleep(&ts, NULL);
+*/
 
     pthread_mutex_lock(&app_thread_sig_mutex);
     while (!app_thread_should_wake) {
@@ -602,7 +639,7 @@ void mtcp_connect(int socket_fd, struct sockaddr_in *server_addr) {
 
     /* char recvBuff[100];
      char *buff = "hello";
- 
+
      ssize_t len;
      // send message to server
      printf("Say 'hello' to server.\n");
@@ -610,7 +647,7 @@ void mtcp_connect(int socket_fd, struct sockaddr_in *server_addr) {
          printf("Send Error: %s (Errno:%d)\n", strerror(errno), errno);
          exit(0);
      }
- 
+
      // receiver message from server
      if ((len = recvfrom(socket_fd, recvBuff, sizeof(recvBuff) - 1, 0, NULL, NULL)) < 0) {
          printf("Recv Error: %s (Errno:%d)\n", strerror(errno), errno);
@@ -635,27 +672,33 @@ int mtcp_write(int socket_fd, unsigned char *buf, int buf_len) {
         state != DATA_TRANSMITTING_TIMEOUT) {
         return -1;
     }
-    change_state(DATA_TRANSMITTING_START);
+    if (state == CONNECTED) {
+        change_state(DATA_TRANSMITTING_START);
+    }
 
     pthread_mutex_trylock(&send_thread_sig_mutex);
     send_thread_should_wake = true;
     pthread_cond_signal(&send_thread_sig);
     pthread_mutex_unlock(&send_thread_sig_mutex);
 
+/*
     struct timespec ts;
     ts.tv_nsec = 100000000;
     ts.tv_sec = 0;
     nanosleep(&ts, NULL);
+*/
 
-    pthread_mutex_lock(&app_thread_sig_mutex);
-    while (!app_thread_should_wake) {
-        pthread_cond_wait(&app_thread_sig, &app_thread_sig_mutex);
-        app_thread_should_wake = false;
-    }
-    pthread_mutex_unlock(&app_thread_sig_mutex);
+//    pthread_mutex_lock(&app_thread_sig_mutex);
+//    while (!app_thread_should_wake) {
+//        pthread_cond_wait(&app_thread_sig, &app_thread_sig_mutex);
+//        app_thread_should_wake = false;
+//    }
+//    pthread_mutex_unlock(&app_thread_sig_mutex);
 
-    if (sendto_status < 0) {
-        return sendto_status;
+    if (sendto_len < 0) {
+        printf("Failed write to server\n");
+
+        return (int) sendto_len;
     }
     printf("Successfully write to server\n");
 
@@ -664,6 +707,7 @@ int mtcp_write(int socket_fd, unsigned char *buf, int buf_len) {
 
 /* Close Function Call (mtcp Version) */
 void mtcp_close(int socket_fd) {
-
+    printf("closing\n");
+    sleep(100);
 }
 
