@@ -15,7 +15,8 @@ typedef enum server_state {
     CLOSED,
     CONNECTING_START, CONNECTING_SYN_RECEIVED, CONNECTING_SYN_ACK_SENT, CONNECTED,
     WAIT_FOR_DATA, DATA_RECEIVED, DATA_ACK_SENT,
-    DATA_TRANSMITTING, DISCONNECTING,
+    DISCONNECTING_START,DISCONNECTING_SYN_ACK_SENT,DISCONNECTING_FIN_RECEIVED, DISCONNECTING,
+    DATA_TRANSMITTING,
     OTHER
 
 } ServerState;
@@ -328,12 +329,14 @@ static void *send_thread() {
             case CONNECTING_SYN_ACK_SENT:
                 break;
             case CONNECTED:
+            {
                 pthread_mutex_lock(&send_thread_sig_mutex);
                 while (!send_thread_should_wake) {
                     pthread_cond_wait(&send_thread_sig, &send_thread_sig_mutex);
                 }
                 send_thread_should_wake = false;
                 pthread_mutex_unlock(&send_thread_sig_mutex);
+            }
                 break;
             case DATA_TRANSMITTING:
                 break;
@@ -356,6 +359,10 @@ static void *send_thread() {
                 break;
             case DATA_ACK_SENT:
                 break;
+            case DISCONNECTING_START:
+                break;
+            case DISCONNECTING_SYN_ACK_SENT:break;
+            case DISCONNECTING_FIN_RECEIVED:break;
         }
 
         if (state == OTHER) {
@@ -447,6 +454,26 @@ static void *receive_thread() {
                     break;
                 case DATA_ACK_SENT:
                     break;
+                case DISCONNECTING_START:
+                {
+                    pthread_mutex_trylock(&send_thread_sig_mutex);
+                    last_packet_type = get_packet_type(packet_buffer);
+                    last_received_sequence_number = get_packet_seq(packet_buffer);
+
+                    if (last_packet_type == FIN && last_received_sequence_number == next_expected_sequence_number) {
+                        printf("FYN packet #%d received\n", last_received_sequence_number);
+                        sequence_number = last_received_sequence_number + 1;
+                        change_state(DISCONNECTING_FIN_RECEIVED);
+                        pthread_mutex_trylock(&send_thread_sig_mutex);
+                        send_thread_should_wake = true;
+                        pthread_cond_signal(&send_thread_sig);
+                        pthread_mutex_unlock(&send_thread_sig_mutex);
+                    } else {
+                        printf("Type [%d] packet received\n", last_packet_type);
+                    }
+                }
+                    break;
+                case DISCONNECTING_SYN_ACK_SENT:break;
             }
         }
         if (state == OTHER) {
@@ -514,19 +541,26 @@ void mtcp_accept(int socket_fd, struct sockaddr_in *server_addr) {
 
 
 int mtcp_read(int socket_fd, unsigned char *buf, int buf_len) {
-//    change_state(WAIT_FOR_DATA);
-//    pthread_mutex_lock(&app_thread_sig_mutex);
-//    while (!app_thread_should_wake) {
-//        pthread_cond_wait(&app_thread_sig, &app_thread_sig_mutex);
-//    }
-//    app_thread_should_wake = false;
-//    pthread_mutex_unlock(&app_thread_sig_mutex);
-//
-//    printf("Successfully read from the server\n");
+/*    change_state(WAIT_FOR_DATA);
+    pthread_mutex_lock(&app_thread_sig_mutex);
+    while (!app_thread_should_wake) {
+        pthread_cond_wait(&app_thread_sig, &app_thread_sig_mutex);
+    }
+    app_thread_should_wake = false;
+    pthread_mutex_unlock(&app_thread_sig_mutex);
+
+    printf("Successfully read from the server\n");*/
     //temp
     return 0;
 }
 
 void mtcp_close(int socket_fd) {
-
+    //change_state(DISCONNECTING_START);
+    app_thread_should_wake = false;
+    pthread_mutex_lock(&app_thread_sig_mutex);
+    while (!app_thread_should_wake) {
+        pthread_cond_wait(&app_thread_sig, &app_thread_sig_mutex);
+    }
+    app_thread_should_wake = false;
+    pthread_mutex_unlock(&app_thread_sig_mutex);
 }
