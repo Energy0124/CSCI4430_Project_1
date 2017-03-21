@@ -146,6 +146,7 @@ unsigned char *enqueue_buffer(unsigned char *target_buffer, size_t *target_buffe
                               size_t *target_buffer_max_size_ptr,
                               unsigned char *source_buffer, size_t source_buffer_size) {
 
+    pthread_mutex_lock(&info_mutex);
     if (source_buffer_size + *target_buffer_current_size_ptr > *target_buffer_max_size_ptr) {
         *target_buffer_max_size_ptr = (source_buffer_size + *target_buffer_max_size_ptr) * 2;
         unsigned char *new_target_buffer = realloc(target_buffer, *target_buffer_max_size_ptr);
@@ -162,6 +163,9 @@ unsigned char *enqueue_buffer(unsigned char *target_buffer, size_t *target_buffe
     }
     memcpy(target_buffer + *target_buffer_current_size_ptr, source_buffer, source_buffer_size);
     *target_buffer_current_size_ptr += source_buffer_size;
+    pthread_mutex_unlock(&info_mutex);
+
+//    printf("just enqueued: %d, currently have: %d\n", source_buffer_size, *target_buffer_current_size_ptr);
     return target_buffer;
 
 }
@@ -189,17 +193,23 @@ unsigned char *enqueue_receive_buffer(unsigned char *source_buffer, size_t sourc
  * the got buffer will then be stored in dequeued_buffer
  * it will return actual dequeued size
  */
-size_t dequeue_buffer(unsigned char *target_buffer, size_t *target_buffer_current_size_ptr,
-                      unsigned char *dequeued_buffer, size_t dequeued_buffer_size) {
+size_t
+dequeue_buffer(unsigned char *target_buffer, size_t *target_buffer_current_size_ptr, size_t target_buffer_max_size,
+               unsigned char *dequeued_buffer, size_t dequeued_buffer_size) {
+    pthread_mutex_lock(&info_mutex);
+
     if (*target_buffer_current_size_ptr < dequeued_buffer_size) {
         printf("target_buffer_current_size < dequeued_buffer_size!\n");
         dequeued_buffer_size = *target_buffer_current_size_ptr;
     }
-    if (dequeued_buffer_size > 0) {
+    if (dequeued_buffer != NULL) {
         memcpy(dequeued_buffer, target_buffer, dequeued_buffer_size);
-        memmove(target_buffer, target_buffer + (int) dequeued_buffer_size, dequeued_buffer_size);
     }
+    memmove(target_buffer, target_buffer + (int) dequeued_buffer_size,
+            target_buffer_max_size - dequeued_buffer_size);
     *target_buffer_current_size_ptr -= dequeued_buffer_size;
+    pthread_mutex_unlock(&info_mutex);
+
     return dequeued_buffer_size;
 }
 
@@ -208,14 +218,16 @@ size_t dequeue_buffer(unsigned char *target_buffer, size_t *target_buffer_curren
  * wrapper of dequeue_buffer for receive buffer
  */
 size_t dequeue_send_buffer(unsigned char *dequeued_buffer, size_t dequeued_buffer_size) {
-    return dequeue_buffer(send_buffer, &send_buffer_current_size, dequeued_buffer, dequeued_buffer_size);
+    return dequeue_buffer(send_buffer, &send_buffer_current_size, send_buffer_max_size, dequeued_buffer,
+                          dequeued_buffer_size);
 }
 
 /*
  * wrapper of dequeue_buffer for receive buffer
  */
 size_t dequeue_receive_buffer(unsigned char *dequeued_buffer, size_t dequeued_buffer_size) {
-    return dequeue_buffer(receive_buffer, &receive_buffer_current_size, dequeued_buffer, dequeued_buffer_size);
+    return dequeue_buffer(receive_buffer, &receive_buffer_current_size, receive_buffer_max_size, dequeued_buffer,
+                          dequeued_buffer_size);
 }
 
 /*
@@ -424,7 +436,7 @@ static void *send_thread() {
 
             }
                 break;
-            case DUPLICATED_DATA_RECEIVED:{
+            case DUPLICATED_DATA_RECEIVED: {
 //                pthread_mutex_lock(&app_thread_sig_mutex);
                 size_t packet_size;
 
@@ -559,7 +571,8 @@ static void *receive_thread() {
                         pthread_cond_signal(&app_thread_sig);
                         pthread_mutex_unlock(&app_thread_sig_mutex);
                         // pthread_mutex_unlock(&app_thread_sig_mutex);
-                    } else if (last_packet_type == DATA&&last_received_sequence_number < next_expected_sequence_number) {
+                    } else if (last_packet_type == DATA &&
+                               last_received_sequence_number < next_expected_sequence_number) {
                         unsigned char *data_buffer = get_packet_data(packet_buffer);
                         size_t data_size = get_packet_data_size(len);
                         sequence_number = (uint32_t) (last_received_sequence_number + data_size);
@@ -577,6 +590,8 @@ static void *receive_thread() {
                 }
                     break;
                 case DATA_RECEIVED:
+                    break;
+                case DUPLICATED_DATA_RECEIVED:
                     break;
                 case DATA_ACK_SENT:
                     break;
@@ -602,6 +617,7 @@ static void *receive_thread() {
                     break;
                 case DISCONNECTING_FIN_RECEIVED:
                     break;
+
             }
         }
         if (state == OTHER) {

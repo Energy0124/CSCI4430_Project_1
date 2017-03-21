@@ -79,6 +79,7 @@ unsigned char *enqueue_buffer(unsigned char *target_buffer, size_t *target_buffe
                               size_t *target_buffer_max_size_ptr,
                               unsigned char *source_buffer, size_t source_buffer_size) {
 
+    pthread_mutex_lock(&info_mutex);
     if (source_buffer_size + *target_buffer_current_size_ptr > *target_buffer_max_size_ptr) {
         *target_buffer_max_size_ptr = (source_buffer_size + *target_buffer_max_size_ptr) * 2;
         unsigned char *new_target_buffer = realloc(target_buffer, *target_buffer_max_size_ptr);
@@ -95,6 +96,8 @@ unsigned char *enqueue_buffer(unsigned char *target_buffer, size_t *target_buffe
     }
     memcpy(target_buffer + *target_buffer_current_size_ptr, source_buffer, source_buffer_size);
     *target_buffer_current_size_ptr += source_buffer_size;
+    pthread_mutex_unlock(&info_mutex);
+
 //    printf("just enqueued: %d, currently have: %d\n", source_buffer_size, *target_buffer_current_size_ptr);
     return target_buffer;
 
@@ -113,8 +116,8 @@ unsigned char *enqueue_send_buffer(unsigned char *source_buffer, size_t source_b
  */
 unsigned char *enqueue_receive_buffer(unsigned char *source_buffer, size_t source_buffer_size) {
     return receive_buffer = enqueue_buffer(receive_buffer, &receive_buffer_current_size, &receive_buffer_max_size,
-                                        source_buffer,
-                                        source_buffer_size);
+                                           source_buffer,
+                                           source_buffer_size);
 }
 
 
@@ -123,17 +126,23 @@ unsigned char *enqueue_receive_buffer(unsigned char *source_buffer, size_t sourc
  * the got buffer will then be stored in dequeued_buffer
  * it will return actual dequeued size
  */
-size_t dequeue_buffer(unsigned char *target_buffer, size_t *target_buffer_current_size_ptr,
-                      unsigned char *dequeued_buffer, size_t dequeued_buffer_size) {
+size_t
+dequeue_buffer(unsigned char *target_buffer, size_t *target_buffer_current_size_ptr, size_t target_buffer_max_size,
+               unsigned char *dequeued_buffer, size_t dequeued_buffer_size) {
+    pthread_mutex_lock(&info_mutex);
+
     if (*target_buffer_current_size_ptr < dequeued_buffer_size) {
         printf("target_buffer_current_size < dequeued_buffer_size!\n");
         dequeued_buffer_size = *target_buffer_current_size_ptr;
     }
     if (dequeued_buffer != NULL) {
         memcpy(dequeued_buffer, target_buffer, dequeued_buffer_size);
-        memmove(target_buffer, target_buffer + (int) dequeued_buffer_size, dequeued_buffer_size);
     }
+    memmove(target_buffer, target_buffer + (int) dequeued_buffer_size,
+            target_buffer_max_size - dequeued_buffer_size);
     *target_buffer_current_size_ptr -= dequeued_buffer_size;
+    pthread_mutex_unlock(&info_mutex);
+
     return dequeued_buffer_size;
 }
 
@@ -142,14 +151,16 @@ size_t dequeue_buffer(unsigned char *target_buffer, size_t *target_buffer_curren
  * wrapper of dequeue_buffer for receive buffer
  */
 size_t dequeue_send_buffer(unsigned char *dequeued_buffer, size_t dequeued_buffer_size) {
-    return dequeue_buffer(send_buffer, &send_buffer_current_size, dequeued_buffer, dequeued_buffer_size);
+    return dequeue_buffer(send_buffer, &send_buffer_current_size, send_buffer_max_size, dequeued_buffer,
+                          dequeued_buffer_size);
 }
 
 /*
  * wrapper of dequeue_buffer for receive buffer
  */
 size_t dequeue_receive_buffer(unsigned char *dequeued_buffer, size_t dequeued_buffer_size) {
-    return dequeue_buffer(receive_buffer, &receive_buffer_current_size, dequeued_buffer, dequeued_buffer_size);
+    return dequeue_buffer(receive_buffer, &receive_buffer_current_size, receive_buffer_max_size, dequeued_buffer,
+                          dequeued_buffer_size);
 }
 
 /*
@@ -394,7 +405,7 @@ static void *send_thread() {
                 pthread_mutex_unlock(&send_thread_sig_mutex);*/
                 break;
             case DATA_TRANSMITTING_START: {
-                unsigned char *data;
+                unsigned char data[1000];
                 size_t data_size;
                 if (send_buffer_current_size > 1000) {
                     data_size = 1000;
@@ -403,7 +414,11 @@ static void *send_thread() {
                 } else {
                     break;
                 }
-                data = send_buffer;
+                pthread_mutex_lock(&info_mutex);
+                memcpy(&data, send_buffer, data_size);
+                pthread_mutex_unlock(&info_mutex);
+
+                printf("%c%c%c%c%c\n", data[0], data[1], data[2], data[3], data[4]);
 
                 size_t packet_size;
                 unsigned char *buff = construct_packet(DATA, sequence_number, data, data_size, &packet_size);
@@ -432,7 +447,8 @@ static void *send_thread() {
             }
                 break;
             case DATA_TRANSMITTING_DATA_SENT: {
-                unsigned char *data;
+                unsigned char data[1000];
+
                 size_t data_size;
                 if (send_buffer_current_size > 1000) {
                     data_size = 1000;
@@ -442,7 +458,11 @@ static void *send_thread() {
                     change_state(CONNECTED);
                     break;
                 }
-                data = send_buffer;
+                pthread_mutex_lock(&info_mutex);
+                memcpy(&data, send_buffer, data_size);
+                pthread_mutex_unlock(&info_mutex);
+                printf("%c%c%c%c%c\n", data[0], data[1], data[2], data[3], data[4]);
+
                 size_t packet_size;
                 unsigned char *buff = construct_packet(DATA, sequence_number, data, data_size, &packet_size);
                 ssize_t len;
@@ -465,7 +485,8 @@ static void *send_thread() {
             }
                 break;
             case DATA_TRANSMITTING_ACK_RECEIVED: {
-                unsigned char *data;
+                unsigned char data[1000];
+
                 size_t data_size;
                 if (send_buffer_current_size > 1000) {
                     data_size = 1000;
@@ -475,7 +496,11 @@ static void *send_thread() {
                     change_state(CONNECTED);
                     break;
                 }
-                data = send_buffer;
+                pthread_mutex_lock(&info_mutex);
+                memcpy(&data, send_buffer, data_size);
+                pthread_mutex_unlock(&info_mutex);
+                printf("%c%c%c%c%c\n", data[0], data[1], data[2], data[3], data[4]);
+
                 size_t packet_size;
                 unsigned char *buff = construct_packet(DATA, sequence_number, data, data_size, &packet_size);
                 ssize_t len;
