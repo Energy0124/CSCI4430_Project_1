@@ -39,10 +39,10 @@ static pthread_mutex_t send_thread_sig_mutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t info_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 //  New variable
-char *send_buffer;
+unsigned char *send_buffer;
 size_t send_buffer_max_size = MAX_BUF_SIZE * MAX_BUF_SIZE + 1;
 size_t send_buffer_current_size = 0;
-char *receive_buffer;
+unsigned char *receive_buffer;
 size_t receive_buffer_max_size = MAX_BUF_SIZE * MAX_BUF_SIZE + 1;
 size_t receive_buffer_current_size = 0;
 
@@ -125,13 +125,13 @@ void change_state(ServerState serverState) {
  * then return new target buffer
  * if realloc encounter error, a NULL pointer will be returned
  */
-unsigned char * enqueue_buffer(unsigned char *target_buffer, size_t *target_buffer_current_size_ptr,
-                               size_t *target_buffer_max_size_ptr,
-                               unsigned char *source_buffer, size_t source_buffer_size) {
+unsigned char *enqueue_buffer(unsigned char *target_buffer, size_t *target_buffer_current_size_ptr,
+                              size_t *target_buffer_max_size_ptr,
+                              unsigned char *source_buffer, size_t source_buffer_size) {
 
     if (source_buffer_size + *target_buffer_current_size_ptr > *target_buffer_max_size_ptr) {
         *target_buffer_max_size_ptr = (source_buffer_size + *target_buffer_max_size_ptr) * 2;
-        char *new_target_buffer = realloc(target_buffer, *target_buffer_max_size_ptr);
+        unsigned char *new_target_buffer = realloc(target_buffer, *target_buffer_max_size_ptr);
         if (new_target_buffer != NULL) {
             return new_target_buffer;
         } else {
@@ -140,6 +140,7 @@ unsigned char * enqueue_buffer(unsigned char *target_buffer, size_t *target_buff
         }
     } else {
         memcpy(target_buffer + *target_buffer_current_size_ptr, source_buffer, source_buffer_size);
+        *target_buffer_current_size_ptr += source_buffer_size;
         return target_buffer;
     }
 }
@@ -147,16 +148,16 @@ unsigned char * enqueue_buffer(unsigned char *target_buffer, size_t *target_buff
 /*
  * wrapper of enqueue_buffer for send buffer
  */
-char *enqueue_send_buffer(char *source_buffer, size_t source_buffer_size) {
-    enqueue_buffer(send_buffer, &send_buffer_current_size, &send_buffer_max_size, source_buffer, source_buffer_size);
+unsigned char *enqueue_send_buffer(unsigned char *source_buffer, size_t source_buffer_size) {
+    return enqueue_buffer(send_buffer, &send_buffer_current_size, &send_buffer_max_size, source_buffer, source_buffer_size);
 }
 
 /*
  * wrapper of enqueue_buffer for receive buffer
  */
-unsigned char * enqueue_receive_buffer(unsigned char *source_buffer, size_t source_buffer_size) {
-    enqueue_buffer(receive_buffer, &receive_buffer_current_size, &receive_buffer_max_size, source_buffer,
-                   source_buffer_size);
+unsigned char *enqueue_receive_buffer(unsigned char *source_buffer, size_t source_buffer_size) {
+    return enqueue_buffer(receive_buffer, &receive_buffer_current_size, &receive_buffer_max_size, source_buffer,
+                          source_buffer_size);
 }
 
 
@@ -181,14 +182,14 @@ size_t dequeue_buffer(unsigned char *target_buffer, size_t *target_buffer_curren
  * wrapper of dequeue_buffer for receive buffer
  */
 size_t dequeue_send_buffer(unsigned char *dequeued_buffer, size_t dequeued_buffer_size) {
-    dequeue_buffer(send_buffer, &send_buffer_current_size, dequeued_buffer, dequeued_buffer_size);
+    return dequeue_buffer(send_buffer, &send_buffer_current_size, dequeued_buffer, dequeued_buffer_size);
 }
 
 /*
  * wrapper of dequeue_buffer for receive buffer
  */
 size_t dequeue_receive_buffer(unsigned char *dequeued_buffer, size_t dequeued_buffer_size) {
-    dequeue_buffer(receive_buffer, &receive_buffer_current_size, dequeued_buffer, dequeued_buffer_size);
+    return dequeue_buffer(receive_buffer, &receive_buffer_current_size, dequeued_buffer, dequeued_buffer_size);
 }
 
 /*
@@ -242,7 +243,7 @@ size_t construct_packet_to_buffer(PacketType type, uint32_t seq, unsigned char *
  */
 unsigned char * construct_packet(PacketType type, uint32_t seq, unsigned char *data, size_t data_size,
                                  size_t *packet_size) {
-    char *packet_buffer = malloc(4 + data_size);
+    unsigned char *packet_buffer = malloc(4 + data_size);
     if (NULL != packet_size) {
         *packet_size = construct_packet_to_buffer(type, seq, data, data_size, packet_buffer);
 
@@ -257,14 +258,14 @@ unsigned char * construct_packet(PacketType type, uint32_t seq, unsigned char *d
  */
 unsigned char * malloc_packet_buffer(size_t *packet_size) {
     *packet_size = 4 + 1000;
-    char *packet_buffer = malloc(*packet_size);
+    unsigned char *packet_buffer = malloc(*packet_size);
     return packet_buffer;
 }
 
 /*
  * return the packet type
  */
-PacketType get_packet_type(char *packet_buffer) {
+PacketType get_packet_type(unsigned char *packet_buffer) {
     PacketType type;
     uint32_t seq;
     decode_header_from_packet(&type, &seq, packet_buffer);
@@ -277,19 +278,25 @@ PacketType get_packet_type(char *packet_buffer) {
 /*
  * return the packet seq
  */
-uint32_t get_packet_seq(char *packet_buffer) {
+uint32_t get_packet_seq(unsigned char *packet_buffer) {
     PacketType type;
     uint32_t seq;
     decode_header_from_packet(&type, &seq, packet_buffer);
     return seq;
 }
 
-char *get_packet_data(char *packet_buffer) {
+/*
+ * return the packet data
+ */
+unsigned char *get_packet_data(unsigned char *packet_buffer) {
     return packet_buffer + 4;
 }
 
-size_t get_packet_data_size(ssize_t len) {
-    return (size_t) (len - 4);
+/*
+ * return the packet data size
+ */
+size_t get_packet_data_size(ssize_t packet_len) {
+    return (size_t) (packet_len - 4);
 }
 
 

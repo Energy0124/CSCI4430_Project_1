@@ -90,6 +90,7 @@ unsigned char *enqueue_buffer(unsigned char *target_buffer, size_t *target_buffe
         }
     } else {
         memcpy(target_buffer + *target_buffer_current_size_ptr, source_buffer, source_buffer_size);
+        *target_buffer_current_size_ptr += source_buffer_size;
         return target_buffer;
     }
 }
@@ -98,14 +99,14 @@ unsigned char *enqueue_buffer(unsigned char *target_buffer, size_t *target_buffe
  * wrapper of enqueue_buffer for send buffer
  */
 unsigned char *enqueue_send_buffer(unsigned char *source_buffer, size_t source_buffer_size) {
-    enqueue_buffer(send_buffer, &send_buffer_current_size, &send_buffer_max_size, source_buffer, source_buffer_size);
+    return enqueue_buffer(send_buffer, &send_buffer_current_size, &send_buffer_max_size, source_buffer, source_buffer_size);
 }
 
 /*
  * wrapper of enqueue_buffer for receive buffer
  */
 unsigned char *enqueue_receive_buffer(unsigned char *source_buffer, size_t source_buffer_size) {
-    enqueue_buffer(receive_buffer, &receive_buffer_current_size, &receive_buffer_max_size, source_buffer,
+    return enqueue_buffer(receive_buffer, &receive_buffer_current_size, &receive_buffer_max_size, source_buffer,
                    source_buffer_size);
 }
 
@@ -232,6 +233,19 @@ uint32_t get_packet_seq(unsigned char *packet_buffer) {
     uint32_t seq;
     decode_header_from_packet(&type, &seq, packet_buffer);
     return seq;
+}
+/*
+ * return the packet data
+ */
+unsigned char *get_packet_data(unsigned char *packet_buffer) {
+    return packet_buffer + 4;
+}
+
+/*
+ * return the packet data size
+ */
+size_t get_packet_data_size(ssize_t packet_len) {
+    return (size_t) (packet_len - 4);
 }
 
 /*
@@ -614,9 +628,10 @@ void mtcp_connect(int socket_fd, struct sockaddr_in *server_addr) {
 int mtcp_write(int socket_fd, unsigned char *buf, int buf_len) {
     socket_file_descriptor = socket_fd;
     enqueue_send_buffer(buf, (size_t) buf_len);
-    if (state != DATA_TRANSMITTING_START ||
-        state != DATA_TRANSMITTING_DATA_SENT ||
-        state != DATA_TRANSMITTING_ACK_RECEIVED ||
+    if (state != CONNECTED &&
+        state != DATA_TRANSMITTING_START &&
+        state != DATA_TRANSMITTING_DATA_SENT &&
+        state != DATA_TRANSMITTING_ACK_RECEIVED &&
         state != DATA_TRANSMITTING_TIMEOUT) {
         return -1;
     }
