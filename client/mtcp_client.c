@@ -20,7 +20,7 @@ typedef enum client_state {
     CONNECTING_START, CONNECTING_SYN_SENT, CONNECTING_SYN_ACK_RECEIVED, CONNECTED,
 
     DATA_TRANSMITTING_START, DATA_TRANSMITTING_DATA_SENT, DATA_TRANSMITTING_ACK_RECEIVED, DATA_TRANSMITTING_TIMEOUT,
-    DISCONNECTING,
+    DISCONNECTING, DISCONNECTING_FIN_SENT, DISCONNECTING_FIN_ACK_RECEIVED,
     OTHER
 
 } ClientState;
@@ -526,10 +526,53 @@ static void *send_thread() {
             case DATA_TRANSMITTING_TIMEOUT:
                 break;
             case DISCONNECTING:
+            {
+                size_t packet_size;
+                unsigned char *buff = construct_packet(FIN, sequence_number, NULL, 0, &packet_size);
+
+                ssize_t len;
+                if ((sendto_len = sendto(socket_file_descriptor, buff, packet_size, 0,
+                                         (struct sockaddr *) server_address,
+                                         address_length)) <= 0) {
+//                if ((len = sendto(socket_file_descriptor, buff, packet_size, 0, (struct sockaddr *) &server_addr,
+//                                  addrLen)) <= 0) {
+                    printf("Send Error: %s (Errno:%d)\n", strerror(errno), errno);
+                    exit(0);
+                }
+                free(buff);
+                printf("FIN packet #%d sent\n", sequence_number);
+                next_expected_sequence_number = sequence_number + 1;
+                change_state(DISCONNECTING_FIN_SENT);
+            }
                 break;
             case OTHER:
                 break;
 
+            case DISCONNECTING_FIN_SENT:break;
+            case DISCONNECTING_FIN_ACK_RECEIVED:
+            {
+                size_t packet_size;
+                unsigned char *buff = construct_packet(ACK, sequence_number, NULL, 0, &packet_size);
+                ssize_t len;
+                if ((sendto_len = sendto(socket_file_descriptor, buff, packet_size, 0,
+                                         (struct sockaddr *) server_address,
+                                         address_length)) <= 0) {
+                    printf("Send Error: %s (Errno:%d)\n", strerror(errno), errno);
+                    exit(0);
+                }
+                free(buff);
+                printf("ACK packet #%d sent\n", sequence_number);
+                next_expected_sequence_number = sequence_number + 1;
+                change_state(OTHER);
+                pthread_mutex_trylock(&app_thread_sig_mutex);
+                app_thread_should_wake = true;
+                pthread_cond_signal(&app_thread_sig);
+                pthread_mutex_unlock(&app_thread_sig_mutex);
+
+                send_thread_should_stop = true;
+                pthread_exit(0);
+            }
+                break;
         }
         if (state == OTHER) {
             break;
@@ -616,6 +659,30 @@ static void *receive_thread() {
                 case OTHER:
                     break;
 
+                case DISCONNECTING_FIN_SENT: {
+                    pthread_mutex_trylock(&send_thread_sig_mutex);
+                    last_packet_type = get_packet_type(packet_buffer);
+                    last_received_sequence_number = get_packet_seq(packet_buffer);
+                    printf("%d %d %d\n", last_packet_type, last_received_sequence_number,
+                           next_expected_sequence_number);
+                    if (last_packet_type ==FIN_ACK && last_received_sequence_number == next_expected_sequence_number) {
+                        printf("FIN_ACK packet #%d received\n", last_received_sequence_number);
+                        change_state(DISCONNECTING_FIN_ACK_RECEIVED);
+                        sequence_number++;
+                        pthread_mutex_trylock(&send_thread_sig_mutex);
+                        send_thread_should_wake = true;
+                        pthread_cond_signal(&send_thread_sig);
+                        pthread_mutex_unlock(&send_thread_sig_mutex);
+
+                        receive_thread_should_stop = true;
+                        pthread_exit(0);
+
+                    } else {
+                        printf("Type [%d] packet received\n", last_packet_type);
+                    }
+                }
+                    break;
+                case DISCONNECTING_FIN_ACK_RECEIVED:break;
             }
         }
         if (state == OTHER) {
@@ -732,9 +799,23 @@ int mtcp_write(int socket_fd, unsigned char *buf, int buf_len) {
 
 /* Close Function Call (mtcp Version) */
 void mtcp_close(int socket_fd) {
+    change_state(DISCONNECTING);
 
+    pthread_mutex_trylock(&send_thread_sig_mutex);
+    send_thread_should_wake = true;
+    pthread_cond_signal(&send_thread_sig);
+    pthread_mutex_unlock(&send_thread_sig_mutex);
+
+    pthread_mutex_lock(&app_thread_sig_mutex);
+    while (!app_thread_should_wake) {
+        pthread_cond_wait(&app_thread_sig, &app_thread_sig_mutex);
+    }
+    app_thread_should_wake = false;
+    pthread_mutex_unlock(&app_thread_sig_mutex);
 
     printf("closing\n");
-    sleep(100);
+    pthread_join(send_thread_pid,NULL);
+    pthread_join(recv_thread_pid,NULL);
+    return;
 }
 
