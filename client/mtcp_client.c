@@ -732,6 +732,8 @@ int mtcp_write(int socket_fd, unsigned char *buf, int buf_len) {
 
 /* Close Function Call (mtcp Version) */
 void mtcp_close(int socket_fd) {
+
+
     printf("closing\n");
     sleep(100);
 }

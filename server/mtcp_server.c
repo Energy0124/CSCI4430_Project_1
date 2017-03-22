@@ -403,6 +403,7 @@ static void *send_thread() {
                 printf("FIN_ACK packet #%d sent\n", sequence_number);
                 next_expected_sequence_number = sequence_number;
                 change_state(DISCONNECTING_FIN_ACK_SENT);
+                send_thread_should_stop = true;
                 pthread_exit(0);
 
             }
@@ -518,7 +519,7 @@ static void *receive_thread() {
                     last_received_sequence_number = get_packet_seq(packet_buffer);
 
                     if (last_packet_type == FIN && last_received_sequence_number == next_expected_sequence_number) {
-                        printf("FYN packet #%d received\n", last_received_sequence_number);
+                        printf("FIN packet #%d received\n", last_received_sequence_number);
                         sequence_number = last_received_sequence_number + 1;
                         change_state(DISCONNECTING_FIN_RECEIVED);
                         pthread_mutex_trylock(&send_thread_sig_mutex);
@@ -531,6 +532,26 @@ static void *receive_thread() {
                 }
                     break;
                 case DISCONNECTING_FIN_ACK_SENT:
+                {
+                    //pthread_mutex_trylock(&send_thread_sig_mutex);
+                    last_packet_type = get_packet_type(packet_buffer);
+                    last_received_sequence_number = get_packet_seq(packet_buffer);
+                    if (last_packet_type == ACK && last_received_sequence_number == next_expected_sequence_number) {
+                        printf("ACK packet #%d received\n", last_received_sequence_number);
+                        change_state(DISCONNECTING);
+                        sequence_number = last_received_sequence_number + 1;
+                        pthread_mutex_trylock(&app_thread_sig_mutex);
+                        app_thread_should_wake = true;
+                        pthread_cond_signal(&app_thread_sig);
+                        pthread_mutex_unlock(&app_thread_sig_mutex);
+
+                        receive_thread_should_stop = true;
+                        pthread_exit(0);
+                    } else {
+                        printf("Type [%d] packet received\n", last_packet_type);
+                    }
+
+                }
                     break;
                 case DISCONNECTING_FIN_RECEIVED:
                     break;
@@ -641,5 +662,5 @@ void mtcp_close(int socket_fd) {
 
     pthread_join(send_thread_pid,NULL);
     pthread_join(recv_thread_pid,NULL);
-
+    return;
 }
