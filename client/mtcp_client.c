@@ -754,8 +754,8 @@ void mtcp_connect(int socket_fd, struct sockaddr_in *server_addr) {
     pthread_mutex_lock(&app_thread_sig_mutex);
     while (!app_thread_should_wake) {
         pthread_cond_wait(&app_thread_sig, &app_thread_sig_mutex);
-        app_thread_should_wake = false;
     }
+    app_thread_should_wake = false;
     pthread_mutex_unlock(&app_thread_sig_mutex);
 
     printf("Successfully connected to server\n");
