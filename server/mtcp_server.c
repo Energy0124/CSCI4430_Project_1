@@ -765,6 +765,7 @@ void mtcp_accept(int socket_fd, struct sockaddr_in *server_addr) {
 
 
 int mtcp_read(int socket_fd, unsigned char *buf, int buf_len) {
+
     app_thread_should_wake = false;
     change_state(WAIT_FOR_DATA);
 
@@ -776,12 +777,14 @@ int mtcp_read(int socket_fd, unsigned char *buf, int buf_len) {
     while (!app_thread_should_wake) {
     }*/
 
-    pthread_mutex_lock(&app_thread_sig_mutex);
-    while (!app_thread_should_wake) {
-        pthread_cond_wait(&app_thread_sig, &app_thread_sig_mutex);
+    if (!FIN_trigger) {
+        pthread_mutex_lock(&app_thread_sig_mutex);
+        while (!app_thread_should_wake) {
+            pthread_cond_wait(&app_thread_sig, &app_thread_sig_mutex);
+        }
+        app_thread_should_wake = false;
+        pthread_mutex_unlock(&app_thread_sig_mutex);
     }
-    app_thread_should_wake = false;
-    pthread_mutex_unlock(&app_thread_sig_mutex);
 
     int dequeued_size = (int) dequeue_receive_buffer(buf, (size_t) buf_len);
     printf("Successfully read %d bytes from the client\n", dequeued_size);
