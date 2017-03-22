@@ -727,10 +727,10 @@ static void *receive_thread() {
 /* Connect Function Call (mtcp Version) */
 void mtcp_connect(int socket_fd, struct sockaddr_in *server_addr) {
     socket_file_descriptor = socket_fd;
-    struct timeval tv;
-    tv.tv_sec = 1;  /* 1 Secs Timeout */
-    tv.tv_usec = 0;  // Not init'ing this can cause strange errors
-    setsockopt(socket_file_descriptor, SOL_SOCKET, SO_RCVTIMEO, (const char *) &tv, sizeof(struct timeval));
+//    struct timeval tv;
+//    tv.tv_sec = 1;  /* 1 Secs Timeout */
+//    tv.tv_usec = 0;  // Not init'ing this can cause strange errors
+//    setsockopt(socket_file_descriptor, SOL_SOCKET, SO_RCVTIMEO, (const char *) &tv, sizeof(struct timeval));
     server_address = malloc(sizeof(struct sockaddr_in));
     memcpy(server_address, server_addr, sizeof(struct sockaddr_in));
     // initialize size variable which is used later

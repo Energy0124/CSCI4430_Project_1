@@ -733,10 +733,10 @@ void mtcp_accept(int socket_fd, struct sockaddr_in *server_addr) {
     memcpy(client_addr, server_addr, sizeof(struct sockaddr_in));
     // initialize size variable which is used later
     addrLen = sizeof(struct sockaddr_in);
-    struct timeval tv;
-    tv.tv_sec = 1;  /* 1 Secs Timeout */
-    tv.tv_usec = 0;  // Not init'ing this can cause strange errors
-    setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, (const char *) &tv, sizeof(struct timeval));
+//    struct timeval tv;
+//    tv.tv_sec = 1;  /* 1 Secs Timeout */
+//    tv.tv_usec = 0;  // Not init'ing this can cause strange errors
+//    setsockopt(socket_fd, SOL_SOCKET, SO_RCVTIMEO, (const char *) &tv, sizeof(struct timeval));
     //create a large enough init buffer
     send_buffer = malloc(send_buffer_max_size);
     receive_buffer = malloc(receive_buffer_max_size);
