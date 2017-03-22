@@ -82,12 +82,14 @@ unsigned char *enqueue_buffer(unsigned char *target_buffer, size_t *target_buffe
 
     pthread_mutex_lock(&info_mutex);
     if (source_buffer_size + *target_buffer_current_size_ptr > *target_buffer_max_size_ptr) {
-        *target_buffer_max_size_ptr = (source_buffer_size + *target_buffer_max_size_ptr) * 2;
-        unsigned char *new_target_buffer = realloc(target_buffer, *target_buffer_max_size_ptr);
+        size_t new_target_buffer_max_size = (source_buffer_size + *target_buffer_max_size_ptr) * 2;
+        unsigned char *new_target_buffer = realloc(target_buffer, new_target_buffer_max_size);
         if (new_target_buffer != NULL) {
             printf("Realloced buffer!\n");
-            memcpy(new_target_buffer, target_buffer, *target_buffer_max_size_ptr);
-            free(target_buffer);
+            if (new_target_buffer!=target_buffer) {
+                printf("%p => %p \n", (void *) target_buffer, (void *) new_target_buffer);
+            }
+            *target_buffer_max_size_ptr = new_target_buffer_max_size;
             target_buffer = new_target_buffer;
 
         } else {
@@ -133,7 +135,7 @@ dequeue_buffer(unsigned char *target_buffer, size_t *target_buffer_current_size_
     pthread_mutex_lock(&info_mutex);
 
     if (*target_buffer_current_size_ptr < dequeued_buffer_size) {
-        printf("target_buffer_current_size < dequeued_buffer_size!\n");
+//        printf("target_buffer_current_size < dequeued_buffer_size!\n");
         dequeued_buffer_size = *target_buffer_current_size_ptr;
     }
     if (dequeued_buffer != NULL) {
